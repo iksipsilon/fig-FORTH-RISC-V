@@ -1,61 +1,2983 @@
 # fig-FORTH for RISC-V: the listings
 #
-# The high-level words of the model: colon definitions, written as threads.
-# No machine instructions here; those are in figforth.asm (the nucleus) and in
-# the board file. figforth.asm includes this file at its end, so the words
-# here follow the nucleus in the dictionary.
+# The high-level words of the fig-FORTH model (fig-FORTH Installation Manual,
+# Release 1), as the assembly listings of the Forth Interest Group gave them:
+# every colon definition written out as its thread, one code field address
+# per `dw`. The only machine instructions in this file are the model's own:
+# the few behind the ;CODE of : CONSTANT VARIABLE USER and DOES>. The CODE
+# words are in figforth.asm (the nucleus), the chip in board.asm.
+# figforth.asm includes this file at its end, so these words follow the
+# nucleus in the dictionary.
+#
+# Above each word is its definition in Forth. Numbers there are decimal, and
+# a name in small letters (origin) is a label of the assembler: its address
+# is put on the stack.
+# Where a definition is not the model's, the note above it says why. The
+# reasons are always the same three:
+#
+#   the cell     is 4 bytes: a link, code or parameter field is 4 bytes, and
+#                a thread steps by 4
+#   alignment    @ and ! trap on an address that is not a multiple of 4, so
+#                the dictionary pointer is rounded up after a name or a text
+#   flash        the kernel cannot be written, so nothing in it may change.
+#                The body of the FORTH vocabulary is in RAM (FORTH_VOC).
+#
+# The disc is not here yet: BLOCK BUFFER LOAD LIST and their company, and the
+# disc half of WORD, QUIT, ERROR, MESSAGE and the null word. BLK stays 0.
 #
 # A word is its header (python3 tools/header.py NAME label previous docol),
-# then one code field address per `dw`, and %offset(label) after each branch.
-# When a word with a header is added at the end, move `last_nfa:` from
-# figforth.asm to the name field of that word.
+# then the thread. `last_nfa:` stands on the name field of the newest word:
+# move that line when a word is added at the end.
+
+# ------------------------------------------------------------------------
+# COLON AND SEMICOLON, CONSTANT VARIABLE USER
+#
+# As in the model, each of the four defining words ends in ;CODE: (;CODE)
+# points the code field of the new word at the machine code that follows it
+# in the thread. That code gets W = the code field address from NEXT; the
+# parameter field is at CELL(W). The kernel's own colon words, constants
+# and user variables have these labels in their code fields.
+
+# :  ( -- )  start a colon definition
+#   : :  ?EXEC !CSP CURRENT @ CONTEXT ! CREATE ]  ;CODE  the code below  IMMEDIATE
+align 4
+n_colon:
+    db 0xC1
+    string :
+    bytes 0x20 0xA0
+    dw n_stod
+colon:
+    dw docol
+    dw qexec
+    dw scsp
+    dw curr
+    dw at
+    dw cont
+    dw store
+    dw creat
+    dw rbrac
+    dw pscod
+docol:                          # a colon definition: nest into its thread
+    addi RSP, RSP, -CELL
+    sw IP, 0(RSP)
+    addi IP, W, CELL
+    j next
+
+# ;  ( -- )  end a colon definition
+#   : ;  ?CSP COMPILE ;S SMUDGE [COMPILE] [ ;  IMMEDIATE
+align 4
+n_semi:
+    db 0xC1
+    string ;
+    bytes 0x20 0xA0
+    dw n_colon
+semi:
+    dw docol
+    dw qcsp
+    dw comp
+    dw semis
+    dw smudg
+    dw lbrac
+    dw semis
+
+# CONSTANT  ( n -- )  n CONSTANT name: name pushes n
+#   : CONSTANT  CREATE SMUDGE ,  ;CODE  the code below
+align 4
+n_con:
+    db 0x88
+    string CONSTANT
+    bytes 0x20 0x20 0xA0
+    dw n_semi
+con:
+    dw docol
+    dw creat
+    dw smudg
+    dw comma
+    dw pscod
+docon:                          # a CONSTANT: push its parameter
+    lw a1, CELL(W)
+    j push
+
+# VARIABLE  ( n -- )  n VARIABLE name: name pushes the address of a cell that holds n
+#   : VARIABLE  CONSTANT  ;CODE  the code below
+align 4
+n_var:
+    db 0x88
+    string VARIABLE
+    bytes 0x20 0x20 0xA0
+    dw n_con
+var:
+    dw docol
+    dw con
+    dw pscod
+dovar:                          # a VARIABLE: push the address of its parameter
+    addi a1, W, CELL
+    j push
+
+# USER  ( n -- )  n USER name: name pushes the user area address + n
+#   : USER  CONSTANT  ;CODE  the code below
+align 4
+n_user:
+    db 0x84
+    string USER
+    bytes 0x20 0x20 0xA0
+    dw n_var
+user:
+    dw docol
+    dw con
+    dw pscod
+douse:                          # a USER variable: its parameter is an offset
+    lw a1, CELL(W)              # into the user area
+    add a1, a1, UP
+    j push
 
 
 # ------------------------------------------------------------------------
-# A STAND-IN FOR ABORT
-#
-# The model's ABORT (SCR 54) ends in QUIT, the text interpreter. Until the
-# high-level words are here, this prints a line and echoes the keys, which
-# shows that the inner interpreter runs on the chip. It is also an example of
-# a colon definition written by hand: docol in the code field, one code field
-# address per cell, and %offset after each branch.
-#
-#   : ABORT  SP!  CR  banner1 banner DO  I C@ EMIT  LOOP  CR
-#            BEGIN  KEY DUP EMIT  13 XOR 0=  IF  10 EMIT  ENDIF  AGAIN ;
+# CONSTANTS
 
+# 0  ( -- 0 )
 align 4
-abort:
+n_zero:
+    db 0x81
+    string 0
+    bytes 0x20 0xA0
+    dw n_user
+zero:
+    dw docon
+    dw 0
+
+# 1  ( -- 1 )
+align 4
+n_one:
+    db 0x81
+    string 1
+    bytes 0x20 0xA0
+    dw n_zero
+one:
+    dw docon
+    dw 1
+
+# 2  ( -- 2 )
+align 4
+n_two:
+    db 0x81
+    string 2
+    bytes 0x20 0xA0
+    dw n_one
+two:
+    dw docon
+    dw 2
+
+# 3  ( -- 3 )
+align 4
+n_three:
+    db 0x81
+    string 3
+    bytes 0x20 0xA0
+    dw n_two
+three:
+    dw docon
+    dw 3
+
+# BL  ( -- 32 )  the blank
+align 4
+n_bl:
+    db 0x82
+    string BL
+    bytes 0xA0
+    dw n_three
+bl:
+    dw docon
+    dw 32
+
+# C/L  ( -- 64 )  characters in a line
+align 4
+n_csll:
+    db 0x83
+    string C/
+    db 0xCC                 # L + 0x80
+    dw n_bl
+csll:
+    dw docon
+    dw 64
+
+# +ORIGIN  ( n -- addr )  the address n bytes into the origin table (SCR 12 of the nucleus)
+#   : +ORIGIN  origin + ;
+align 4
+n_porig:
+    db 0x87
+    string +ORIGI
+    db 0xCE                 # N + 0x80
+    dw n_csll
+porig:
     dw docol
-    dw spsto
-    dw cr
     dw lit
-    dw banner1
+    dw origin
+    dw plus
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# USER VARIABLES
+#
+# The parameter is the offset into the user area: the model's, doubled.
+
+# S0  ( -- addr )  where the data stack starts
+align 4
+n_szero:
+    db 0x82
+    string S0
+    bytes 0xA0
+    dw n_porig
+szero:
+    dw douse
+    dw 0x0C
+
+# R0  ( -- addr )  where the return stack starts
+align 4
+n_rzero:
+    db 0x82
+    string R0
+    bytes 0xA0
+    dw n_szero
+rzero:
+    dw douse
+    dw 0x10
+
+# TIB  ( -- addr )  the address of the terminal input buffer
+align 4
+n_tib:
+    db 0x83
+    string TI
+    db 0xC2                 # B + 0x80
+    dw n_rzero
+tib:
+    dw douse
+    dw 0x14
+
+# WIDTH  ( -- addr )  the most characters kept of a name
+align 4
+n_width:
+    db 0x85
+    string WIDTH
+    bytes 0x20 0xA0
+    dw n_tib
+width:
+    dw douse
+    dw 0x18
+
+# WARNING  ( -- addr )  0: messages are numbers; below 0: an error runs (ABORT)
+align 4
+n_warn:
+    db 0x87
+    string WARNIN
+    db 0xC7                 # G + 0x80
+    dw n_width
+warn:
+    dw douse
+    dw 0x1C
+
+# FENCE  ( -- addr )  FORGET does not go below this address
+align 4
+n_fence:
+    db 0x85
+    string FENCE
+    bytes 0x20 0xA0
+    dw n_warn
+fence:
+    dw douse
+    dw 0x20
+
+# DP  ( -- addr )  the dictionary pointer
+align 4
+n_dp:
+    db 0x82
+    string DP
+    bytes 0xA0
+    dw n_fence
+dp:
+    dw douse
+    dw 0x24
+
+# VOC-LINK  ( -- addr )  the newest vocabulary
+align 4
+n_vocl:
+    db 0x88
+    string VOC-LINK
+    bytes 0x20 0x20 0xA0
+    dw n_dp
+vocl:
+    dw douse
+    dw 0x28
+
+# BLK  ( -- addr )  the block being interpreted; 0 is the terminal
+align 4
+n_blk:
+    db 0x83
+    string BL
+    db 0xCB                 # K + 0x80
+    dw n_vocl
+blk:
+    dw douse
+    dw 0x2C
+
+# IN  ( -- addr )  the offset into the text being interpreted
+align 4
+n_inn:
+    db 0x82
+    string IN
+    bytes 0xA0
+    dw n_blk
+inn:
+    dw douse
+    dw 0x30
+
+# OUT  ( -- addr )  characters sent; EMIT counts
+align 4
+n_out:
+    db 0x83
+    string OU
+    db 0xD4                 # T + 0x80
+    dw n_inn
+out:
+    dw douse
+    dw 0x34
+
+# SCR  ( -- addr )  the screen last listed
+align 4
+n_scr:
+    db 0x83
+    string SC
+    db 0xD2                 # R + 0x80
+    dw n_out
+scr:
+    dw douse
+    dw 0x38
+
+# OFFSET  ( -- addr )  added to block numbers
+align 4
+n_ofset:
+    db 0x86
+    string OFFSET
+    bytes 0xA0
+    dw n_scr
+ofset:
+    dw douse
+    dw 0x3C
+
+# CONTEXT  ( -- addr )  the vocabulary searched first
+align 4
+n_cont:
+    db 0x87
+    string CONTEX
+    db 0xD4                 # T + 0x80
+    dw n_ofset
+cont:
+    dw douse
+    dw 0x40
+
+# CURRENT  ( -- addr )  the vocabulary new words go into
+align 4
+n_curr:
+    db 0x87
+    string CURREN
+    db 0xD4                 # T + 0x80
+    dw n_cont
+curr:
+    dw douse
+    dw 0x44
+
+# STATE  ( -- addr )  0 executing, 192 compiling
+align 4
+n_state:
+    db 0x85
+    string STATE
+    bytes 0x20 0xA0
+    dw n_curr
+state:
+    dw douse
+    dw 0x48
+
+# BASE  ( -- addr )  the number base
+align 4
+n_base:
+    db 0x84
+    string BASE
+    bytes 0x20 0x20 0xA0
+    dw n_state
+base:
+    dw douse
+    dw 0x4C
+
+# DPL  ( -- addr )  digits after the point of the last number, or -1
+align 4
+n_dpl:
+    db 0x83
+    string DP
+    db 0xCC                 # L + 0x80
+    dw n_base
+dpl:
+    dw douse
+    dw 0x50
+
+# FLD  ( -- addr )  field width; not used
+align 4
+n_fld:
+    db 0x83
+    string FL
+    db 0xC4                 # D + 0x80
+    dw n_dpl
+fld:
+    dw douse
+    dw 0x54
+
+# CSP  ( -- addr )  the stack pointer when the definition began
+align 4
+n_csp:
+    db 0x83
+    string CS
+    db 0xD0                 # P + 0x80
+    dw n_fld
+csp:
+    dw douse
+    dw 0x58
+
+# R#  ( -- addr )  the editor's cursor
+align 4
+n_rnum:
+    db 0x82
+    bytes 0x52 0x23 0xA0    # R#
+    dw n_csp
+rnum:
+    dw douse
+    dw 0x5C
+
+# HLD  ( -- addr )  the last character of the number being put out
+align 4
+n_hld:
+    db 0x83
+    string HL
+    db 0xC4                 # D + 0x80
+    dw n_rnum
+hld:
+    dw douse
+    dw 0x60
+
+
+# ------------------------------------------------------------------------
+# SMALL WORDS
+
+# 1+  ( n -- n+1 )
+#   : 1+  1 + ;
+align 4
+n_onep:
+    db 0x82
+    string 1+
+    bytes 0xA0
+    dw n_hld
+onep:
+    dw docol
+    dw one
+    dw plus
+    dw semis
+
+# 2+  ( n -- n+2 )
+#   : 2+  2 + ;
+align 4
+n_twop:
+    db 0x82
+    string 2+
+    bytes 0xA0
+    dw n_onep
+twop:
+    dw docol
+    dw two
+    dw plus
+    dw semis
+
+# HERE  ( -- addr )  the next free address of the dictionary
+#   : HERE  DP @ ;
+align 4
+n_here:
+    db 0x84
+    string HERE
+    bytes 0x20 0x20 0xA0
+    dw n_twop
+here:
+    dw docol
+    dw dp
+    dw at
+    dw semis
+
+# ALLOT  ( n -- )  take n bytes of the dictionary
+#   : ALLOT  DP +! ;
+align 4
+n_allot:
+    db 0x85
+    string ALLOT
+    bytes 0x20 0xA0
+    dw n_here
+allot:
+    dw docol
+    dw dp
+    dw pstor
+    dw semis
+
+# ALIGN  ( -- )  round the dictionary pointer up to a cell. Not in the model.
+#   : ALIGN  HERE 3 + -4 AND DP ! ;
+align 4
+n_alignn:
+    db 0x85
+    string ALIGN
+    bytes 0x20 0xA0
+    dw n_allot
+alignn:
+    dw docol
+    dw here
+    dw three
+    dw plus
     dw lit
-    dw banner
+    dw -4
+    dw andd
+    dw dp
+    dw store
+    dw semis
+
+# ,  ( n -- )  put a cell into the dictionary. The cell is 4.
+#   : ,  HERE ! 4 ALLOT ;
+align 4
+n_comma:
+    db 0x81
+    bytes 0x2C 0x20 0xA0    # ,
+    dw n_alignn
+comma:
+    dw docol
+    dw here
+    dw store
+    dw lit
+    dw 4
+    dw allot
+    dw semis
+
+# C,  ( b -- )  put a byte into the dictionary
+#   : C,  HERE C! 1 ALLOT ;
+align 4
+n_ccomm:
+    db 0x82
+    bytes 0x43 0x2C 0xA0    # C,
+    dw n_comma
+ccomm:
+    dw docol
+    dw here
+    dw cstor
+    dw one
+    dw allot
+    dw semis
+
+# -  ( n1 n2 -- n1-n2 )
+#   : -  MINUS + ;
+align 4
+n_subb:
+    db 0x81
+    string -
+    bytes 0x20 0xA0
+    dw n_ccomm
+subb:
+    dw docol
+    dw minus
+    dw plus
+    dw semis
+
+# =  ( n1 n2 -- f )
+#   : =  - 0= ;
+align 4
+n_equal:
+    db 0x81
+    string =
+    bytes 0x20 0xA0
+    dw n_subb
+equal:
+    dw docol
+    dw subb
+    dw zequ
+    dw semis
+
+# <  ( n1 n2 -- f )
+#   : <  - 0< ;
+align 4
+n_less:
+    db 0x81
+    string <
+    bytes 0x20 0xA0
+    dw n_equal
+less:
+    dw docol
+    dw subb
+    dw zless
+    dw semis
+
+# >  ( n1 n2 -- f )
+#   : >  SWAP < ;
+align 4
+n_great:
+    db 0x81
+    string >
+    bytes 0x20 0xA0
+    dw n_less
+great:
+    dw docol
+    dw swap
+    dw less
+    dw semis
+
+# ROT  ( n1 n2 n3 -- n2 n3 n1 )
+#   : ROT  >R SWAP R> SWAP ;
+align 4
+n_rot:
+    db 0x83
+    string RO
+    db 0xD4                 # T + 0x80
+    dw n_great
+rot:
+    dw docol
+    dw tor
+    dw swap
+    dw fromr
+    dw swap
+    dw semis
+
+# SPACE  ( -- )
+#   : SPACE  BL EMIT ;
+align 4
+n_space:
+    db 0x85
+    string SPACE
+    bytes 0x20 0xA0
+    dw n_rot
+space:
+    dw docol
+    dw bl
+    dw emit
+    dw semis
+
+# -DUP  ( n -- n n | 0 )  duplicate if not zero
+#   : -DUP  DUP IF DUP THEN ;
+align 4
+n_ddup:
+    db 0x84
+    string -DUP
+    bytes 0x20 0x20 0xA0
+    dw n_space
+ddup:
+    dw docol
+    dw dup
+    dw zbran
+    dw %offset(ddup1)
+    dw dup
+ddup1:
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# THE FIELDS OF A WORD
+#
+# From the parameter field: the code field is 4 below, the link field 8, and
+# the last byte of the name field 9. The model's numbers are 2, 4 and 5.
+
+# TRAVERSE  ( addr n -- addr )  to the other end of a name field; n is 1 or -1
+#   : TRAVERSE  SWAP BEGIN OVER + 127 OVER C@ < UNTIL SWAP DROP ;
+align 4
+n_trav:
+    db 0x88
+    string TRAVERSE
+    bytes 0x20 0x20 0xA0
+    dw n_ddup
+trav:
+    dw docol
+    dw swap
+trav1:
+    dw over
+    dw plus
+    dw lit
+    dw 127
+    dw over
+    dw cat
+    dw less
+    dw zbran
+    dw %offset(trav1)
+    dw swap
+    dw drop
+    dw semis
+
+# LATEST  ( -- nfa )  the newest word of CURRENT
+#   : LATEST  CURRENT @ @ ;
+align 4
+n_lates:
+    db 0x86
+    string LATEST
+    bytes 0xA0
+    dw n_trav
+lates:
+    dw docol
+    dw curr
+    dw at
+    dw at
+    dw semis
+
+# LFA  ( pfa -- lfa )
+#   : LFA  8 - ;
+align 4
+n_lfa:
+    db 0x83
+    string LF
+    db 0xC1                 # A + 0x80
+    dw n_lates
+lfa:
+    dw docol
+    dw lit
+    dw 8
+    dw subb
+    dw semis
+
+# CFA  ( pfa -- cfa )
+#   : CFA  4 - ;
+align 4
+n_cfa:
+    db 0x83
+    string CF
+    db 0xC1                 # A + 0x80
+    dw n_lfa
+cfa:
+    dw docol
+    dw lit
+    dw 4
+    dw subb
+    dw semis
+
+# NFA  ( pfa -- nfa )
+#   : NFA  9 - -1 TRAVERSE ;
+align 4
+n_nfa:
+    db 0x83
+    string NF
+    db 0xC1                 # A + 0x80
+    dw n_cfa
+nfa:
+    dw docol
+    dw lit
+    dw 9
+    dw subb
+    dw lit
+    dw -1
+    dw trav
+    dw semis
+
+# PFA  ( nfa -- pfa )
+#   : PFA  1 TRAVERSE 9 + ;
+align 4
+n_pfa:
+    db 0x83
+    string PF
+    db 0xC1                 # A + 0x80
+    dw n_nfa
+pfa:
+    dw docol
+    dw one
+    dw trav
+    dw lit
+    dw 9
+    dw plus
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# COMPILER SECURITY
+
+# !CSP  ( -- )  note the stack pointer
+#   : !CSP  SP@ CSP ! ;
+align 4
+n_scsp:
+    db 0x84
+    string !CSP
+    bytes 0x20 0x20 0xA0
+    dw n_pfa
+scsp:
+    dw docol
+    dw spat
+    dw csp
+    dw store
+    dw semis
+
+# ?ERROR  ( f n -- )  error n if f is true
+#   : ?ERROR  SWAP IF ERROR ELSE DROP THEN ;
+align 4
+n_qerr:
+    db 0x86
+    string ?ERROR
+    bytes 0xA0
+    dw n_scsp
+qerr:
+    dw docol
+    dw swap
+    dw zbran
+    dw %offset(qerr1)
+    dw error
+    dw bran
+    dw %offset(qerr2)
+qerr1:
+    dw drop
+qerr2:
+    dw semis
+
+# ?COMP  ( -- )  error 17 unless compiling
+#   : ?COMP  STATE @ 0= 17 ?ERROR ;
+align 4
+n_qcomp:
+    db 0x85
+    string ?COMP
+    bytes 0x20 0xA0
+    dw n_qerr
+qcomp:
+    dw docol
+    dw state
+    dw at
+    dw zequ
+    dw lit
+    dw 17
+    dw qerr
+    dw semis
+
+# ?EXEC  ( -- )  error 18 unless executing
+#   : ?EXEC  STATE @ 18 ?ERROR ;
+align 4
+n_qexec:
+    db 0x85
+    string ?EXEC
+    bytes 0x20 0xA0
+    dw n_qcomp
+qexec:
+    dw docol
+    dw state
+    dw at
+    dw lit
+    dw 18
+    dw qerr
+    dw semis
+
+# ?PAIRS  ( n1 n2 -- )  error 19 if the conditionals do not pair
+#   : ?PAIRS  - 19 ?ERROR ;
+align 4
+n_qpair:
+    db 0x86
+    string ?PAIRS
+    bytes 0xA0
+    dw n_qexec
+qpair:
+    dw docol
+    dw subb
+    dw lit
+    dw 19
+    dw qerr
+    dw semis
+
+# ?CSP  ( -- )  error 20 if the stack moved since !CSP
+#   : ?CSP  SP@ CSP @ - 20 ?ERROR ;
+align 4
+n_qcsp:
+    db 0x84
+    string ?CSP
+    bytes 0x20 0x20 0xA0
+    dw n_qpair
+qcsp:
+    dw docol
+    dw spat
+    dw csp
+    dw at
+    dw subb
+    dw lit
+    dw 20
+    dw qerr
+    dw semis
+
+# ?LOADING  ( -- )  error 22 unless loading from disc
+#   : ?LOADING  BLK @ 0= 22 ?ERROR ;
+align 4
+n_qload:
+    db 0x88
+    string ?LOADING
+    bytes 0x20 0x20 0xA0
+    dw n_qcsp
+qload:
+    dw docol
+    dw blk
+    dw at
+    dw zequ
+    dw lit
+    dw 22
+    dw qerr
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# COMPILE, THE BRACKETS, SMUDGE, THE BASES, ;CODE
+
+# COMPILE  ( -- )  put the next word of the thread into the dictionary. The step is 4.
+#   : COMPILE  ?COMP R> DUP 4 + >R @ , ;
+align 4
+n_comp:
+    db 0x87
+    string COMPIL
+    db 0xC5                 # E + 0x80
+    dw n_qload
+comp:
+    dw docol
+    dw qcomp
+    dw fromr
+    dw dup
+    dw lit
+    dw 4
+    dw plus
+    dw tor
+    dw at
+    dw comma
+    dw semis
+
+# [  ( -- )  stop compiling
+#   : [  0 STATE ! ;  IMMEDIATE
+align 4
+n_lbrac:
+    db 0xC1
+    string [
+    bytes 0x20 0xA0
+    dw n_comp
+lbrac:
+    dw docol
+    dw zero
+    dw state
+    dw store
+    dw semis
+
+# ]  ( -- )  compile
+#   : ]  192 STATE ! ;
+align 4
+n_rbrac:
+    db 0x81
+    string ]
+    bytes 0x20 0xA0
+    dw n_lbrac
+rbrac:
+    dw docol
+    dw lit
+    dw 192
+    dw state
+    dw store
+    dw semis
+
+# SMUDGE  ( -- )  hide or show the newest word
+#   : SMUDGE  LATEST 32 TOGGLE ;
+align 4
+n_smudg:
+    db 0x86
+    string SMUDGE
+    bytes 0xA0
+    dw n_rbrac
+smudg:
+    dw docol
+    dw lates
+    dw lit
+    dw 32
+    dw toggl
+    dw semis
+
+# HEX  ( -- )
+#   : HEX  16 BASE ! ;
+align 4
+n_hexx:
+    db 0x83
+    string HE
+    db 0xD8                 # X + 0x80
+    dw n_smudg
+hexx:
+    dw docol
+    dw lit
+    dw 16
+    dw base
+    dw store
+    dw semis
+
+# DECIMAL  ( -- )
+#   : DECIMAL  10 BASE ! ;
+align 4
+n_decim:
+    db 0x87
+    string DECIMA
+    db 0xCC                 # L + 0x80
+    dw n_hexx
+decim:
+    dw docol
+    dw lit
+    dw 10
+    dw base
+    dw store
+    dw semis
+
+# (;CODE)  ( -- )  point the newest word's code field at what follows in the thread
+#   : (;CODE)  R> LATEST PFA CFA ! ;
+align 4
+n_pscod:
+    db 0x87
+    string (;CODE
+    db 0xA9                 # ) + 0x80
+    dw n_decim
+pscod:
+    dw docol
+    dw fromr
+    dw lates
+    dw pfa
+    dw cfa
+    dw store
+    dw semis
+
+# ;CODE  ( -- )  end a defining word; machine code follows. There is no assembler
+#        vocabulary yet: the code is put in with , by hand.
+#   : ;CODE  ?CSP COMPILE (;CODE) [COMPILE] [ SMUDGE ;  IMMEDIATE
+align 4
+n_semic:
+    db 0xC5
+    string ;CODE
+    bytes 0x20 0xA0
+    dw n_pscod
+semic:
+    dw docol
+    dw qcsp
+    dw comp
+    dw pscod
+    dw lbrac
+    dw smudg
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# <BUILDS AND DOES>
+
+# <BUILDS  ( -- )  start the header of a word that DOES> will finish
+#   : <BUILDS  0 CONSTANT ;
+align 4
+n_build:
+    db 0x87
+    string <BUILD
+    db 0xD3                 # S + 0x80
+    dw n_semic
+build:
+    dw docol
+    dw zero
+    dw con
+    dw semis
+
+# DOES>  ( -- )  the words after it are what the new word does
+#   : DOES>  R> LATEST PFA !  ;CODE  the code below
+align 4
+n_does:
+    db 0x85
+    string DOES>
+    bytes 0x20 0xA0
+    dw n_build
+does:
+    dw docol
+    dw fromr
+    dw lates
+    dw pfa
+    dw store
+    dw pscod
+dodoe:                          # a word made by <BUILDS ... DOES>: its first
+    addi RSP, RSP, -CELL        # parameter is the address of the thread after
+    sw IP, 0(RSP)               # DOES>. Nest into that, and push the address
+    lw IP, CELL(W)              # of the parameters behind it.
+    addi a1, W, 2*CELL
+    j push
+
+
+# ------------------------------------------------------------------------
+# TEXT OUTPUT
+
+# COUNT  ( addr -- addr+1 n )
+#   : COUNT  DUP 1+ SWAP C@ ;
+align 4
+n_count:
+    db 0x85
+    string COUNT
+    bytes 0x20 0xA0
+    dw n_does
+count:
+    dw docol
+    dw dup
+    dw onep
+    dw swap
+    dw cat
+    dw semis
+
+# TYPE  ( addr n -- )
+#   : TYPE  -DUP IF OVER + SWAP DO I C@ EMIT LOOP ELSE DROP THEN ;
+align 4
+n_typee:
+    db 0x84
+    string TYPE
+    bytes 0x20 0x20 0xA0
+    dw n_count
+typee:
+    dw docol
+    dw ddup
+    dw zbran
+    dw %offset(typee1)
+    dw over
+    dw plus
+    dw swap
     dw xdo
-abort1:
+typee2:
     dw ido
     dw cat
     dw emit
     dw xloop
-    dw %offset(abort1)
-    dw cr
-abort2:
+    dw %offset(typee2)
+    dw bran
+    dw %offset(typee3)
+typee1:
+    dw drop
+typee3:
+    dw semis
+
+# -TRAILING  ( addr n -- addr n' )  without the blanks at the end
+#   : -TRAILING  DUP 0 DO OVER OVER + 1 - C@ BL - IF LEAVE ELSE 1 - THEN LOOP ;
+align 4
+n_dtrai:
+    db 0x89
+    string -TRAILING
+    bytes 0x20 0xA0
+    dw n_typee
+dtrai:
+    dw docol
+    dw dup
+    dw zero
+    dw xdo
+dtrai1:
+    dw over
+    dw over
+    dw plus
+    dw one
+    dw subb
+    dw cat
+    dw bl
+    dw subb
+    dw zbran
+    dw %offset(dtrai2)
+    dw leave
+    dw bran
+    dw %offset(dtrai3)
+dtrai2:
+    dw one
+    dw subb
+dtrai3:
+    dw xloop
+    dw %offset(dtrai1)
+    dw semis
+
+# (.")  ( -- )  type the text that follows in the thread. The thread goes on at
+#        the next cell boundary: 3 + -4 AND, which the model does not have.
+#   : (.")  R COUNT DUP 1+ R> + 3 + -4 AND >R TYPE ;
+align 4
+n_pdotq:
+    db 0x84
+    bytes 0x28 0x2E 0x22 0x29 0x20 0x20 0xA0 # (.")
+    dw n_dtrai
+pdotq:
+    dw docol
+    dw rr
+    dw count
+    dw dup
+    dw onep
+    dw fromr
+    dw plus
+    dw three
+    dw plus
+    dw lit
+    dw -4
+    dw andd
+    dw tor
+    dw typee
+    dw semis
+
+# ."  ( -- )  type, or compile, the text up to the next quote. ALIGN after the
+#        compiled text is not the model's.
+#   : ."  34 STATE @ IF COMPILE (.") WORD HERE C@ 1+ ALLOT ALIGN
+#         ELSE WORD HERE COUNT TYPE THEN ;  IMMEDIATE
+align 4
+n_dotq:
+    db 0xC2
+    bytes 0x2E 0x22 0xA0    # ."
+    dw n_pdotq
+dotq:
+    dw docol
+    dw lit
+    dw 34
+    dw state
+    dw at
+    dw zbran
+    dw %offset(dotq1)
+    dw comp
+    dw pdotq
+    dw wordd
+    dw here
+    dw cat
+    dw onep
+    dw allot
+    dw alignn
+    dw bran
+    dw %offset(dotq2)
+dotq1:
+    dw wordd
+    dw here
+    dw count
+    dw typee
+dotq2:
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# TERMINAL INPUT
+
+# EXPECT  ( addr n -- )  read a line of up to n characters to addr; nulls end it.
+#        20 +ORIGIN holds the backspace key. The model ends with 0 I 1+ ! which
+#        stores a cell at any address: two C! here.
+#   : EXPECT  OVER + OVER DO
+#             KEY DUP 20 +ORIGIN @ = IF
+#             DROP 8 OVER I = DUP R> 2 - + >R -
+#             ELSE DUP 13 = IF LEAVE DROP BL 0 ELSE DUP THEN
+#             I C! 0 I 1+ C! 0 I 2+ C!
+#             THEN EMIT LOOP DROP ;
+align 4
+n_expec:
+    db 0x86
+    string EXPECT
+    bytes 0xA0
+    dw n_dotq
+expec:
+    dw docol
+    dw over
+    dw plus
+    dw over
+    dw xdo
+expec1:
     dw key
     dw dup
-    dw emit
+    dw lit
+    dw 20
+    dw porig
+    dw at
+    dw equal
+    dw zbran
+    dw %offset(expec2)
+    dw drop
+    dw lit
+    dw 8
+    dw over
+    dw ido
+    dw equal
+    dw dup
+    dw fromr
+    dw two
+    dw subb
+    dw plus
+    dw tor
+    dw subb
+    dw bran
+    dw %offset(expec3)
+expec2:
+    dw dup
     dw lit
     dw 13
-    dw xorr
+    dw equal
+    dw zbran
+    dw %offset(expec4)
+    dw leave
+    dw drop
+    dw bl
+    dw zero
+    dw bran
+    dw %offset(expec5)
+expec4:
+    dw dup
+expec5:
+    dw ido
+    dw cstor
+    dw zero
+    dw ido
+    dw onep
+    dw cstor
+    dw zero
+    dw ido
+    dw twop
+    dw cstor
+expec3:
+    dw emit
+    dw xloop
+    dw %offset(expec1)
+    dw drop
+    dw semis
+
+# QUERY  ( -- )  read a line of 80 characters to the terminal input buffer
+#   : QUERY  TIB @ 80 EXPECT 0 IN ! ;
+align 4
+n_query:
+    db 0x85
+    string QUERY
+    bytes 0x20 0xA0
+    dw n_expec
+query:
+    dw docol
+    dw tib
+    dw at
+    dw lit
+    dw 80
+    dw expec
+    dw zero
+    dw inn
+    dw store
+    dw semis
+
+# null  ( -- )  the word whose name is a null: the end of the line. It leaves
+#        INTERPRET. The model's disc half (the next block) is not here.
+#   : null  R> DROP ;  IMMEDIATE
+align 4
+n_null:
+    db 0xC1
+    bytes 0x00 0x20 0xA0    # ^@
+    dw n_query
+null:
+    dw docol
+    dw fromr
+    dw drop
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# FILL, HOLD, PAD, WORD
+
+# FILL  ( addr n b -- )  n is at least 1
+#   : FILL  SWAP >R OVER C! DUP 1+ R> 1 - CMOVE ;
+align 4
+n_fill:
+    db 0x84
+    string FILL
+    bytes 0x20 0x20 0xA0
+    dw n_null
+fill:
+    dw docol
+    dw swap
+    dw tor
+    dw over
+    dw cstor
+    dw dup
+    dw onep
+    dw fromr
+    dw one
+    dw subb
+    dw cmove
+    dw semis
+
+# ERASE  ( addr n -- )
+#   : ERASE  0 FILL ;
+align 4
+n_erase:
+    db 0x85
+    string ERASE
+    bytes 0x20 0xA0
+    dw n_fill
+erase:
+    dw docol
+    dw zero
+    dw fill
+    dw semis
+
+# BLANKS  ( addr n -- )
+#   : BLANKS  BL FILL ;
+align 4
+n_blank:
+    db 0x86
+    string BLANKS
+    bytes 0xA0
+    dw n_erase
+blank:
+    dw docol
+    dw bl
+    dw fill
+    dw semis
+
+# HOLD  ( c -- )  put a character in front of the number being put out
+#   : HOLD  -1 HLD +! HLD @ C! ;
+align 4
+n_hold:
+    db 0x84
+    string HOLD
+    bytes 0x20 0x20 0xA0
+    dw n_blank
+hold:
+    dw docol
+    dw lit
+    dw -1
+    dw hld
+    dw pstor
+    dw hld
+    dw at
+    dw cstor
+    dw semis
+
+# PAD  ( -- addr )  a scratch area, 68 bytes above HERE
+#   : PAD  HERE 68 + ;
+align 4
+n_pad:
+    db 0x83
+    string PA
+    db 0xC4                 # D + 0x80
+    dw n_hold
+pad:
+    dw docol
+    dw here
+    dw lit
+    dw 68
+    dw plus
+    dw semis
+
+# WORD  ( c -- )  move the next word of the input, c its delimiter, to HERE: a
+#        length byte, the text, blanks. The model's disc half is not here.
+#   : WORD  TIB @ IN @ + SWAP ENCLOSE HERE 34 BLANKS IN +!
+#           OVER - >R R HERE C! + HERE 1+ R> CMOVE ;
+align 4
+n_wordd:
+    db 0x84
+    string WORD
+    bytes 0x20 0x20 0xA0
+    dw n_pad
+wordd:
+    dw docol
+    dw tib
+    dw at
+    dw inn
+    dw at
+    dw plus
+    dw swap
+    dw encl
+    dw here
+    dw lit
+    dw 34
+    dw blank
+    dw inn
+    dw pstor
+    dw over
+    dw subb
+    dw tor
+    dw rr
+    dw here
+    dw cstor
+    dw plus
+    dw here
+    dw onep
+    dw fromr
+    dw cmove
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# NUMBER INPUT, -FIND
+
+# (NUMBER)  ( d1 addr1 -- d2 addr2 )  take digits from addr1 + 1 on into d
+#   : (NUMBER)  BEGIN 1+ DUP >R C@ BASE @ DIGIT WHILE
+#               SWAP BASE @ U* DROP ROT BASE @ U* D+
+#               DPL @ 1+ IF 1 DPL +! THEN R> REPEAT R> ;
+align 4
+n_pnumb:
+    db 0x88
+    string (NUMBER)
+    bytes 0x20 0x20 0xA0
+    dw n_wordd
+pnumb:
+    dw docol
+pnumb1:
+    dw onep
+    dw dup
+    dw tor
+    dw cat
+    dw base
+    dw at
+    dw digit
+    dw zbran
+    dw %offset(pnumb2)
+    dw swap
+    dw base
+    dw at
+    dw ustar
+    dw drop
+    dw rot
+    dw base
+    dw at
+    dw ustar
+    dw dplus
+    dw dpl
+    dw at
+    dw onep
+    dw zbran
+    dw %offset(pnumb3)
+    dw one
+    dw dpl
+    dw pstor
+pnumb3:
+    dw fromr
+    dw bran
+    dw %offset(pnumb1)
+pnumb2:
+    dw fromr
+    dw semis
+
+# NUMBER  ( addr -- d )  the text at addr + 1 as a double number; a point sets DPL
+#   : NUMBER  0 0 ROT DUP 1+ C@ 45 = DUP >R + -1
+#             BEGIN DPL ! (NUMBER) DUP C@ BL - WHILE
+#             DUP C@ 46 - 0 ?ERROR 0 REPEAT
+#             DROP R> IF DMINUS THEN ;
+align 4
+n_numb:
+    db 0x86
+    string NUMBER
+    bytes 0xA0
+    dw n_pnumb
+numb:
+    dw docol
+    dw zero
+    dw zero
+    dw rot
+    dw dup
+    dw onep
+    dw cat
+    dw lit
+    dw 45
+    dw equal
+    dw dup
+    dw tor
+    dw plus
+    dw lit
+    dw -1
+numb1:
+    dw dpl
+    dw store
+    dw pnumb
+    dw dup
+    dw cat
+    dw bl
+    dw subb
+    dw zbran
+    dw %offset(numb2)
+    dw dup
+    dw cat
+    dw lit
+    dw 46
+    dw subb
+    dw zero
+    dw qerr
+    dw zero
+    dw bran
+    dw %offset(numb1)
+numb2:
+    dw drop
+    dw fromr
+    dw zbran
+    dw %offset(numb3)
+    dw dminu
+numb3:
+    dw semis
+
+# -FIND  ( -- pfa b 1 | 0 )  look the next word of the input up in CONTEXT, then CURRENT
+#   : -FIND  BL WORD HERE CONTEXT @ @ (FIND)
+#            DUP 0= IF DROP HERE LATEST (FIND) THEN ;
+align 4
+n_dfind:
+    db 0x85
+    string -FIND
+    bytes 0x20 0xA0
+    dw n_numb
+dfind:
+    dw docol
+    dw bl
+    dw wordd
+    dw here
+    dw cont
+    dw at
+    dw at
+    dw pfind
+    dw dup
     dw zequ
     dw zbran
-    dw %offset(abort2)
-    dw lit
-    dw 10
-    dw emit
-    dw bran
-    dw %offset(abort2)
+    dw %offset(dfind1)
+    dw drop
+    dw here
+    dw lates
+    dw pfind
+dfind1:
+    dw semis
 
-banner:
-    string fig-FORTH RISC-V nucleus
-banner1:
+
+# ------------------------------------------------------------------------
+# ERRORS, ID.
+
+# (ABORT)  ( -- )
+#   : (ABORT)  ABORT ;
+align 4
+n_pabor:
+    db 0x87
+    string (ABORT
+    db 0xA9                 # ) + 0x80
+    dw n_dfind
+pabor:
+    dw docol
+    dw abort
+    dw semis
+
+# ERROR  ( n -- in blk )  type the word and the message, empty the stack, leave
+#        IN and BLK on it, go to QUIT
+#   : ERROR  WARNING @ 0< IF (ABORT) THEN
+#            HERE COUNT TYPE ." ? " MESSAGE SP! IN @ BLK @ QUIT ;
+align 4
+n_error:
+    db 0x85
+    string ERROR
+    bytes 0x20 0xA0
+    dw n_pabor
+error:
+    dw docol
+    dw warn
+    dw at
+    dw zless
+    dw zbran
+    dw %offset(error1)
+    dw pabor
+error1:
+    dw here
+    dw count
+    dw typee
+    dw pdotq
+    db 2
+    string ?
+    bytes 0x20
+align 4
+    dw mess
+    dw spsto
+    dw inn
+    dw at
+    dw blk
+    dw at
+    dw quit
+    dw semis
+
+# ID.  ( nfa -- )  type a name
+#   : ID.  PAD 32 95 FILL DUP PFA LFA OVER - PAD SWAP CMOVE
+#          PAD COUNT 31 AND TYPE SPACE ;
+align 4
+n_iddot:
+    db 0x83
+    string ID
+    db 0xAE                 # . + 0x80
+    dw n_error
+iddot:
+    dw docol
+    dw pad
+    dw lit
+    dw 32
+    dw lit
+    dw 95
+    dw fill
+    dw dup
+    dw pfa
+    dw lfa
+    dw over
+    dw subb
+    dw pad
+    dw swap
+    dw cmove
+    dw pad
+    dw count
+    dw lit
+    dw 31
+    dw andd
+    dw typee
+    dw space
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# CREATE
+#
+# The first line is the model's test for a full dictionary: the user area is
+# the first thing above it. The two ALIGN are this port's: one so that the
+# name field starts on a cell boundary whatever was allotted before, one so
+# that the link field does. WORD left blanks after the name, and the last
+# of them takes bit 7. The model's fields are 2 bytes; HERE 4 + here.
+
+# CREATE  ( -- )  make the header of a word named by the next word of the input;
+#        its code field points at its parameter field
+#   : CREATE  TIB HERE 160 + < 2 ?ERROR
+#             ALIGN -FIND IF DROP NFA ID. 4 MESSAGE SPACE THEN
+#             HERE DUP C@ WIDTH @ MIN 1+ ALLOT ALIGN
+#             DUP 160 TOGGLE HERE 1 - 128 TOGGLE
+#             LATEST , CURRENT @ ! HERE 4 + , ;
+align 4
+n_creat:
+    db 0x86
+    string CREATE
+    bytes 0xA0
+    dw n_iddot
+creat:
+    dw docol
+    dw tib
+    dw here
+    dw lit
+    dw 160
+    dw plus
+    dw less
+    dw two
+    dw qerr
+    dw alignn
+    dw dfind
+    dw zbran
+    dw %offset(creat1)
+    dw drop
+    dw nfa
+    dw iddot
+    dw lit
+    dw 4
+    dw mess
+    dw space
+creat1:
+    dw here
+    dw dup
+    dw cat
+    dw width
+    dw at
+    dw minn
+    dw onep
+    dw allot
+    dw alignn
+    dw dup
+    dw lit
+    dw 160
+    dw toggl
+    dw here
+    dw one
+    dw subb
+    dw lit
+    dw 128
+    dw toggl
+    dw lates
+    dw comma
+    dw curr
+    dw at
+    dw store
+    dw here
+    dw lit
+    dw 4
+    dw plus
+    dw comma
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# [COMPILE], LITERAL, ?STACK
+
+# [COMPILE]  ( -- )  compile the next word of the input even if it is immediate
+#   : [COMPILE]  -FIND 0= 0 ?ERROR DROP CFA , ;  IMMEDIATE
+align 4
+n_bcomp:
+    db 0xC9
+    string [COMPILE]
+    bytes 0x20 0xA0
+    dw n_creat
+bcomp:
+    dw docol
+    dw dfind
+    dw zequ
+    dw zero
+    dw qerr
+    dw drop
+    dw cfa
+    dw comma
+    dw semis
+
+# LITERAL  ( n -- )  compiling: compile n as a literal
+#   : LITERAL  STATE @ IF COMPILE LIT , THEN ;  IMMEDIATE
+align 4
+n_liter:
+    db 0xC7
+    string LITERA
+    db 0xCC                 # L + 0x80
+    dw n_bcomp
+liter:
+    dw docol
+    dw state
+    dw at
+    dw zbran
+    dw %offset(liter1)
+    dw comp
+    dw lit
+    dw comma
+liter1:
+    dw semis
+
+# DLITERAL  ( d -- )  compiling: compile d as two literals
+#   : DLITERAL  STATE @ IF SWAP [COMPILE] LITERAL [COMPILE] LITERAL THEN ;  IMMEDIATE
+align 4
+n_dlite:
+    db 0xC8
+    string DLITERAL
+    bytes 0x20 0x20 0xA0
+    dw n_liter
+dlite:
+    dw docol
+    dw state
+    dw at
+    dw zbran
+    dw %offset(dlite1)
+    dw swap
+    dw liter
+    dw liter
+dlite1:
+    dw semis
+
+# ?STACK  ( -- )  error 1 if the stack is empty and more, error 7 if it is full.
+#        The model's limits are for its own memory. Here: empty is S0, and
+#        full is when the stack reaches the return stack, which lies under it.
+#   : ?STACK  SP@ S0 @ SWAP < 1 ?ERROR
+#             SP@ R0 @ < 7 ?ERROR ;
+align 4
+n_qstac:
+    db 0x86
+    string ?STACK
+    bytes 0xA0
+    dw n_dlite
+qstac:
+    dw docol
+    dw spat
+    dw szero
+    dw at
+    dw swap
+    dw less
+    dw one
+    dw qerr
+    dw spat
+    dw rzero
+    dw at
+    dw less
+    dw lit
+    dw 7
+    dw qerr
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# THE TEXT INTERPRETER
+
+# INTERPRET  ( -- )  execute or compile the words of the input, one after the other,
+#        until the null word leaves
+#   : INTERPRET  BEGIN -FIND IF
+#                STATE @ < IF CFA , ELSE CFA EXECUTE THEN ?STACK
+#                ELSE HERE NUMBER DPL @ 1+ IF [COMPILE] DLITERAL
+#                ELSE DROP [COMPILE] LITERAL THEN ?STACK
+#                THEN AGAIN ;
+align 4
+n_inter:
+    db 0x89
+    string INTERPRET
+    bytes 0x20 0xA0
+    dw n_qstac
+inter:
+    dw docol
+inter1:
+    dw dfind
+    dw zbran
+    dw %offset(inter2)
+    dw state
+    dw at
+    dw less
+    dw zbran
+    dw %offset(inter3)
+    dw cfa
+    dw comma
+    dw bran
+    dw %offset(inter4)
+inter3:
+    dw cfa
+    dw exec
+inter4:
+    dw qstac
+    dw bran
+    dw %offset(inter5)
+inter2:
+    dw here
+    dw numb
+    dw dpl
+    dw at
+    dw onep
+    dw zbran
+    dw %offset(inter6)
+    dw dlite
+    dw bran
+    dw %offset(inter7)
+inter6:
+    dw drop
+    dw liter
+inter7:
+    dw qstac
+inter5:
+    dw bran
+    dw %offset(inter1)
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# VOCABULARIES
+#
+# A vocabulary's body is: a name field that holds one blank, the name field
+# address of its newest word, the link to the vocabulary made before it. A
+# new vocabulary's newest word is at first the blank name of its parent,
+# whose link field is the parent's newest word.
+#
+# FORTH is made by VOCABULARY in the model. Its body must change with every
+# new word, so here it is three cells of RAM at FORTH_VOC, which COLD fills,
+# and FORTH is a colon definition.
+
+# IMMEDIATE  ( -- )  make the newest word immediate
+#   : IMMEDIATE  LATEST 64 TOGGLE ;
+align 4
+n_immed:
+    db 0x89
+    string IMMEDIATE
+    bytes 0x20 0xA0
+    dw n_inter
+immed:
+    dw docol
+    dw lates
+    dw lit
+    dw 64
+    dw toggl
+    dw semis
+
+# VOCABULARY  ( -- )  VOCABULARY name: name makes itself the CONTEXT vocabulary.
+#        The blank name is 4 bytes (81 20 20 A0), where the model has A081.
+#   : VOCABULARY  <BUILDS 0xA0202081 , CURRENT @ CFA ,
+#                 HERE VOC-LINK @ , VOC-LINK !
+#                 DOES> 4 + CONTEXT ! ;
+align 4
+n_vocab:
+    db 0x8A
+    string VOCABULARY
+    bytes 0xA0
+    dw n_immed
+vocab:
+    dw docol
+    dw build
+    dw lit
+    dw 0xA0202081
+    dw comma
+    dw curr
+    dw at
+    dw cfa
+    dw comma
+    dw here
+    dw vocl
+    dw at
+    dw comma
+    dw vocl
+    dw store
+    dw does
+    dw lit
+    dw 4
+    dw plus
+    dw cont
+    dw store
+    dw semis
+
+# FORTH  ( -- )  make FORTH the CONTEXT vocabulary
+#   : FORTH  FORTH_VOC+CELL CONTEXT ! ;  IMMEDIATE
+align 4
+n_forth:
+    db 0xC5
+    string FORTH
+    bytes 0x20 0xA0
+    dw n_vocab
+forth:
+    dw docol
+    dw lit
+    dw FORTH_VOC+CELL
+    dw cont
+    dw store
+    dw semis
+
+# DEFINITIONS  ( -- )  new words go into the CONTEXT vocabulary
+#   : DEFINITIONS  CONTEXT @ CURRENT ! ;
+align 4
+n_defin:
+    db 0x8B
+    string DEFINITION
+    db 0xD3                 # S + 0x80
+    dw n_forth
+defin:
+    dw docol
+    dw cont
+    dw at
+    dw curr
+    dw store
+    dw semis
+
+# (  ( -- )  a comment, up to the right parenthesis
+#   : (  41 WORD ;  IMMEDIATE
+align 4
+n_paren:
+    db 0xC1
+    string (
+    bytes 0x20 0xA0
+    dw n_defin
+paren:
+    dw docol
+    dw lit
+    dw 41
+    dw wordd
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# QUIT, ABORT, COLD
+
+# QUIT  ( -- )  the outer loop: read a line, interpret it, say OK
+#   : QUIT  0 BLK ! [COMPILE] [
+#           BEGIN RP! CR QUERY INTERPRET
+#           STATE @ 0= IF ." OK" THEN AGAIN ;
+align 4
+n_quit:
+    db 0x84
+    string QUIT
+    bytes 0x20 0x20 0xA0
+    dw n_paren
+quit:
+    dw docol
+    dw zero
+    dw blk
+    dw store
+    dw lbrac
+quit1:
+    dw rpsto
+    dw cr
+    dw query
+    dw inter
+    dw state
+    dw at
+    dw zequ
+    dw zbran
+    dw %offset(quit2)
+    dw pdotq
+    db 2
+    string OK
+align 4
+quit2:
+    dw bran
+    dw %offset(quit1)
+    dw semis
+
+# ABORT  ( -- )  empty the stacks, say who we are, go to QUIT
+#   : ABORT  SP! DECIMAL CR ." fig-FORTH RISC-V"
+#            [COMPILE] FORTH DEFINITIONS QUIT ;
+align 4
+n_abort:
+    db 0x85
+    string ABORT
+    bytes 0x20 0xA0
+    dw n_quit
+abort:
+    dw docol
+    dw spsto
+    dw decim
+    dw cr
+    dw pdotq
+    db 16
+    string fig-FORTH RISC-V
+align 4
+    dw forth
+    dw defin
+    dw quit
+    dw semis
+
+# COLD  ( -- )  the cold start. The code is in the nucleus.
+align 4
+n_coldw:
+    db 0x84
+    string COLD
+    bytes 0x20 0x20 0xA0
+    dw n_abort
+coldw:
+    dw cold
+
+
+# ------------------------------------------------------------------------
+# ARITHMETIC
+
+# +-  ( n1 n2 -- n3 )  n1 with its sign changed if n2 is negative
+#   : +-  0< IF MINUS THEN ;
+align 4
+n_pm:
+    db 0x82
+    string +-
+    bytes 0xA0
+    dw n_coldw
+pm:
+    dw docol
+    dw zless
+    dw zbran
+    dw %offset(pm1)
+    dw minus
+pm1:
+    dw semis
+
+# D+-  ( d1 n -- d2 )
+#   : D+-  0< IF DMINUS THEN ;
+align 4
+n_dpm:
+    db 0x83
+    string D+
+    db 0xAD                 # - + 0x80
+    dw n_pm
+dpm:
+    dw docol
+    dw zless
+    dw zbran
+    dw %offset(dpm1)
+    dw dminu
+dpm1:
+    dw semis
+
+# ABS  ( n -- u )
+#   : ABS  DUP +- ;
+align 4
+n_abss:
+    db 0x83
+    string AB
+    db 0xD3                 # S + 0x80
+    dw n_dpm
+abss:
+    dw docol
+    dw dup
+    dw pm
+    dw semis
+
+# DABS  ( d -- ud )
+#   : DABS  DUP D+- ;
+align 4
+n_dabs:
+    db 0x84
+    string DABS
+    bytes 0x20 0x20 0xA0
+    dw n_abss
+dabs:
+    dw docol
+    dw dup
+    dw dpm
+    dw semis
+
+# MIN  ( n1 n2 -- n )
+#   : MIN  OVER OVER > IF SWAP THEN DROP ;
+align 4
+n_minn:
+    db 0x83
+    string MI
+    db 0xCE                 # N + 0x80
+    dw n_dabs
+minn:
+    dw docol
+    dw over
+    dw over
+    dw great
+    dw zbran
+    dw %offset(minn1)
+    dw swap
+minn1:
+    dw drop
+    dw semis
+
+# MAX  ( n1 n2 -- n )
+#   : MAX  OVER OVER < IF SWAP THEN DROP ;
+align 4
+n_maxx:
+    db 0x83
+    string MA
+    db 0xD8                 # X + 0x80
+    dw n_minn
+maxx:
+    dw docol
+    dw over
+    dw over
+    dw less
+    dw zbran
+    dw %offset(maxx1)
+    dw swap
+maxx1:
+    dw drop
+    dw semis
+
+# M*  ( n1 n2 -- d )
+#   : M*  OVER OVER XOR >R ABS SWAP ABS U* R> D+- ;
+align 4
+n_mstar:
+    db 0x82
+    string M*
+    bytes 0xA0
+    dw n_maxx
+mstar:
+    dw docol
+    dw over
+    dw over
+    dw xorr
+    dw tor
+    dw abss
+    dw swap
+    dw abss
+    dw ustar
+    dw fromr
+    dw dpm
+    dw semis
+
+# M/  ( d n -- remainder quotient )  the remainder has the sign of d
+#   : M/  OVER >R >R DABS R ABS U/
+#         R> R XOR +- SWAP R> +- SWAP ;
+align 4
+n_mslas:
+    db 0x82
+    string M/
+    bytes 0xA0
+    dw n_mstar
+mslas:
+    dw docol
+    dw over
+    dw tor
+    dw tor
+    dw dabs
+    dw rr
+    dw abss
+    dw uslas
+    dw fromr
+    dw rr
+    dw xorr
+    dw pm
+    dw swap
+    dw fromr
+    dw pm
+    dw swap
+    dw semis
+
+# *  ( n1 n2 -- n )
+#   : *  U* DROP ;
+align 4
+n_star:
+    db 0x81
+    string *
+    bytes 0x20 0xA0
+    dw n_mslas
+star:
+    dw docol
+    dw ustar
+    dw drop
+    dw semis
+
+# /MOD  ( n1 n2 -- remainder quotient )
+#   : /MOD  >R S->D R> M/ ;
+align 4
+n_slmod:
+    db 0x84
+    string /MOD
+    bytes 0x20 0x20 0xA0
+    dw n_star
+slmod:
+    dw docol
+    dw tor
+    dw stod
+    dw fromr
+    dw mslas
+    dw semis
+
+# /  ( n1 n2 -- quotient )
+#   : /  /MOD SWAP DROP ;
+align 4
+n_slash:
+    db 0x81
+    string /
+    bytes 0x20 0xA0
+    dw n_slmod
+slash:
+    dw docol
+    dw slmod
+    dw swap
+    dw drop
+    dw semis
+
+# MOD  ( n1 n2 -- remainder )
+#   : MOD  /MOD DROP ;
+align 4
+n_modd:
+    db 0x83
+    string MO
+    db 0xC4                 # D + 0x80
+    dw n_slash
+modd:
+    dw docol
+    dw slmod
+    dw drop
+    dw semis
+
+# */MOD  ( n1 n2 n3 -- remainder quotient )  n1 * n2 / n3, the product a double number
+#   : */MOD  >R M* R> M/ ;
+align 4
+n_ssmod:
+    db 0x85
+    string */MOD
+    bytes 0x20 0xA0
+    dw n_modd
+ssmod:
+    dw docol
+    dw tor
+    dw mstar
+    dw fromr
+    dw mslas
+    dw semis
+
+# */  ( n1 n2 n3 -- n )
+#   : */  */MOD SWAP DROP ;
+align 4
+n_ssla:
+    db 0x82
+    string */
+    bytes 0xA0
+    dw n_ssmod
+ssla:
+    dw docol
+    dw ssmod
+    dw swap
+    dw drop
+    dw semis
+
+# M/MOD  ( ud1 u2 -- u3 ud4 )  unsigned: remainder u3, double quotient ud4
+#   : M/MOD  >R 0 R U/ R> SWAP >R U/ R> ;
+align 4
+n_msmod:
+    db 0x85
+    string M/MOD
+    bytes 0x20 0xA0
+    dw n_ssla
+msmod:
+    dw docol
+    dw tor
+    dw zero
+    dw rr
+    dw uslas
+    dw fromr
+    dw swap
+    dw tor
+    dw uslas
+    dw fromr
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# MESSAGE
+#
+# The model types line n of the message screens when WARNING is 1. There is
+# no disc, so this is its other half only.
+
+# MESSAGE  ( n -- )
+#   : MESSAGE  ." MSG # " . ;
+align 4
+n_mess:
+    db 0x87
+    string MESSAG
+    db 0xC5                 # E + 0x80
+    dw n_msmod
+mess:
+    dw docol
+    dw pdotq
+    db 6
+    bytes 0x4D 0x53 0x47 0x20 0x23 0x20    # MSG #
+align 4
+    dw dot
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# TICK AND FORGET
+
+# '  ( -- pfa )  the parameter field of the next word of the input; compiling,
+#        a literal
+#   : '  -FIND 0= 0 ?ERROR DROP [COMPILE] LITERAL ;  IMMEDIATE
+align 4
+n_tick:
+    db 0xC1
+    bytes 0x27 0x20 0xA0    # '
+    dw n_mess
+tick:
+    dw docol
+    dw dfind
+    dw zequ
+    dw zero
+    dw qerr
+    dw drop
+    dw liter
+    dw semis
+
+# FORGET  ( -- )  FORGET name: take name and all words after it out of the
+#        dictionary. The kernel is below FENCE.
+#   : FORGET  CURRENT @ CONTEXT @ - 24 ?ERROR
+#             [COMPILE] ' DUP FENCE @ < 21 ?ERROR
+#             DUP NFA DP ! LFA @ CURRENT @ ! ;
+align 4
+n_forge:
+    db 0x86
+    string FORGET
+    bytes 0xA0
+    dw n_tick
+forge:
+    dw docol
+    dw curr
+    dw at
+    dw cont
+    dw at
+    dw subb
+    dw lit
+    dw 24
+    dw qerr
+    dw tick
+    dw dup
+    dw fence
+    dw at
+    dw less
+    dw lit
+    dw 21
+    dw qerr
+    dw dup
+    dw nfa
+    dw dp
+    dw store
+    dw lfa
+    dw at
+    dw curr
+    dw at
+    dw store
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# THE CONDITIONALS
+#
+# The 1, 2, 3 and 4 they leave on the stack while compiling are pairing
+# marks, not sizes: they are the model's.
+
+# BACK  ( addr -- )  compile the distance back to addr
+#   : BACK  HERE - , ;
+align 4
+n_back:
+    db 0x84
+    string BACK
+    bytes 0x20 0x20 0xA0
+    dw n_forge
+back:
+    dw docol
+    dw here
+    dw subb
+    dw comma
+    dw semis
+
+# BEGIN
+#   : BEGIN  ?COMP HERE 1 ;  IMMEDIATE
+align 4
+n_begin:
+    db 0xC5
+    string BEGIN
+    bytes 0x20 0xA0
+    dw n_back
+begin:
+    dw docol
+    dw qcomp
+    dw here
+    dw one
+    dw semis
+
+# ENDIF
+#   : ENDIF  ?COMP 2 ?PAIRS HERE OVER - SWAP ! ;  IMMEDIATE
+align 4
+n_endif:
+    db 0xC5
+    string ENDIF
+    bytes 0x20 0xA0
+    dw n_begin
+endif:
+    dw docol
+    dw qcomp
+    dw two
+    dw qpair
+    dw here
+    dw over
+    dw subb
+    dw swap
+    dw store
+    dw semis
+
+# THEN
+#   : THEN  [COMPILE] ENDIF ;  IMMEDIATE
+align 4
+n_then:
+    db 0xC4
+    string THEN
+    bytes 0x20 0x20 0xA0
+    dw n_endif
+then:
+    dw docol
+    dw endif
+    dw semis
+
+# DO
+#   : DO  COMPILE (DO) HERE 3 ;  IMMEDIATE
+align 4
+n_do:
+    db 0xC2
+    string DO
+    bytes 0xA0
+    dw n_then
+do:
+    dw docol
+    dw comp
+    dw xdo
+    dw here
+    dw three
+    dw semis
+
+# LOOP
+#   : LOOP  3 ?PAIRS COMPILE (LOOP) BACK ;  IMMEDIATE
+align 4
+n_loop:
+    db 0xC4
+    string LOOP
+    bytes 0x20 0x20 0xA0
+    dw n_do
+loop:
+    dw docol
+    dw three
+    dw qpair
+    dw comp
+    dw xloop
+    dw back
+    dw semis
+
+# +LOOP
+#   : +LOOP  3 ?PAIRS COMPILE (+LOOP) BACK ;  IMMEDIATE
+align 4
+n_ploop:
+    db 0xC5
+    string +LOOP
+    bytes 0x20 0xA0
+    dw n_loop
+ploop:
+    dw docol
+    dw three
+    dw qpair
+    dw comp
+    dw xploo
+    dw back
+    dw semis
+
+# UNTIL
+#   : UNTIL  1 ?PAIRS COMPILE 0BRANCH BACK ;  IMMEDIATE
+align 4
+n_until:
+    db 0xC5
+    string UNTIL
+    bytes 0x20 0xA0
+    dw n_ploop
+until:
+    dw docol
+    dw one
+    dw qpair
+    dw comp
+    dw zbran
+    dw back
+    dw semis
+
+# END
+#   : END  [COMPILE] UNTIL ;  IMMEDIATE
+align 4
+n_endd:
+    db 0xC3
+    string EN
+    db 0xC4                 # D + 0x80
+    dw n_until
+endd:
+    dw docol
+    dw until
+    dw semis
+
+# AGAIN
+#   : AGAIN  1 ?PAIRS COMPILE BRANCH BACK ;  IMMEDIATE
+align 4
+n_again:
+    db 0xC5
+    string AGAIN
+    bytes 0x20 0xA0
+    dw n_endd
+again:
+    dw docol
+    dw one
+    dw qpair
+    dw comp
+    dw bran
+    dw back
+    dw semis
+
+# REPEAT
+#   : REPEAT  >R >R [COMPILE] AGAIN R> R> 2 - [COMPILE] ENDIF ;  IMMEDIATE
+align 4
+n_repea:
+    db 0xC6
+    string REPEAT
+    bytes 0xA0
+    dw n_again
+repea:
+    dw docol
+    dw tor
+    dw tor
+    dw again
+    dw fromr
+    dw fromr
+    dw two
+    dw subb
+    dw endif
+    dw semis
+
+# IF
+#   : IF  COMPILE 0BRANCH HERE 0 , 2 ;  IMMEDIATE
+align 4
+n_iff:
+    db 0xC2
+    string IF
+    bytes 0xA0
+    dw n_repea
+iff:
+    dw docol
+    dw comp
+    dw zbran
+    dw here
+    dw zero
+    dw comma
+    dw two
+    dw semis
+
+# ELSE
+#   : ELSE  2 ?PAIRS COMPILE BRANCH HERE 0 ,
+#           SWAP 2 [COMPILE] ENDIF 2 ;  IMMEDIATE
+align 4
+n_elsee:
+    db 0xC4
+    string ELSE
+    bytes 0x20 0x20 0xA0
+    dw n_iff
+elsee:
+    dw docol
+    dw two
+    dw qpair
+    dw comp
+    dw bran
+    dw here
+    dw zero
+    dw comma
+    dw swap
+    dw two
+    dw endif
+    dw two
+    dw semis
+
+# WHILE
+#   : WHILE  [COMPILE] IF 2+ ;  IMMEDIATE
+align 4
+n_whilee:
+    db 0xC5
+    string WHILE
+    bytes 0x20 0xA0
+    dw n_elsee
+whilee:
+    dw docol
+    dw iff
+    dw twop
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# NUMBER OUTPUT
+
+# SPACES  ( n -- )
+#   : SPACES  0 MAX -DUP IF 0 DO SPACE LOOP THEN ;
+align 4
+n_spacs:
+    db 0x86
+    string SPACES
+    bytes 0xA0
+    dw n_whilee
+spacs:
+    dw docol
+    dw zero
+    dw maxx
+    dw ddup
+    dw zbran
+    dw %offset(spacs1)
+    dw zero
+    dw xdo
+spacs2:
+    dw space
+    dw xloop
+    dw %offset(spacs2)
+spacs1:
+    dw semis
+
+# <#  ( -- )  start a number: it is built downward from PAD
+#   : <#  PAD HLD ! ;
+align 4
+n_bdigs:
+    db 0x82
+    bytes 0x3C 0x23 0xA0    # <#
+    dw n_spacs
+bdigs:
+    dw docol
+    dw pad
+    dw hld
+    dw store
+    dw semis
+
+# #>  ( d -- addr n )  end it: the text
+#   : #>  DROP DROP HLD @ PAD OVER - ;
+align 4
+n_edigs:
+    db 0x82
+    bytes 0x23 0x3E 0xA0    # #>
+    dw n_bdigs
+edigs:
+    dw docol
+    dw drop
+    dw drop
+    dw hld
+    dw at
+    dw pad
+    dw over
+    dw subb
+    dw semis
+
+# SIGN  ( n d -- d )  a minus sign if n is negative
+#   : SIGN  ROT 0< IF 45 HOLD THEN ;
+align 4
+n_sign:
+    db 0x84
+    string SIGN
+    bytes 0x20 0x20 0xA0
+    dw n_edigs
+sign:
+    dw docol
+    dw rot
+    dw zless
+    dw zbran
+    dw %offset(sign1)
+    dw lit
+    dw 45
+    dw hold
+sign1:
+    dw semis
+
+# #  ( d1 -- d2 )  one digit
+#   : #  BASE @ M/MOD ROT 9 OVER < IF 7 + THEN 48 + HOLD ;
+align 4
+n_dig:
+    db 0x81
+    bytes 0x23 0x20 0xA0    # #
+    dw n_sign
+dig:
+    dw docol
+    dw base
+    dw at
+    dw msmod
+    dw rot
+    dw lit
+    dw 9
+    dw over
+    dw less
+    dw zbran
+    dw %offset(dig1)
+    dw lit
+    dw 7
+    dw plus
+dig1:
+    dw lit
+    dw 48
+    dw plus
+    dw hold
+    dw semis
+
+# #S  ( d -- 0 0 )  all the digits
+#   : #S  BEGIN # OVER OVER OR 0= UNTIL ;
+align 4
+n_digs:
+    db 0x82
+    bytes 0x23 0x53 0xA0    # #S
+    dw n_dig
+digs:
+    dw docol
+digs1:
+    dw dig
+    dw over
+    dw over
+    dw orr
+    dw zequ
+    dw zbran
+    dw %offset(digs1)
+    dw semis
+
+# D.R  ( d n -- )  type d at the right of a field of n
+#   : D.R  >R SWAP OVER DABS <# #S SIGN #>
+#          R> OVER - SPACES TYPE ;
+align 4
+n_ddotr:
+    db 0x83
+    string D.
+    db 0xD2                 # R + 0x80
+    dw n_digs
+ddotr:
+    dw docol
+    dw tor
+    dw swap
+    dw over
+    dw dabs
+    dw bdigs
+    dw digs
+    dw sign
+    dw edigs
+    dw fromr
+    dw over
+    dw subb
+    dw spacs
+    dw typee
+    dw semis
+
+# D.  ( d -- )
+#   : D.  0 D.R SPACE ;
+align 4
+n_ddot:
+    db 0x82
+    string D.
+    bytes 0xA0
+    dw n_ddotr
+ddot:
+    dw docol
+    dw zero
+    dw ddotr
+    dw space
+    dw semis
+
+# .R  ( n1 n2 -- )  type n1 at the right of a field of n2
+#   : .R  >R S->D R> D.R ;
+align 4
+n_dotr:
+    db 0x82
+    string .R
+    bytes 0xA0
+    dw n_ddot
+dotr:
+    dw docol
+    dw tor
+    dw stod
+    dw fromr
+    dw ddotr
+    dw semis
+
+# .  ( n -- )
+#   : .  S->D D. ;
+align 4
+n_dot:
+    db 0x81
+    string .
+    bytes 0x20 0xA0
+    dw n_dotr
+dot:
+    dw docol
+    dw stod
+    dw ddot
+    dw semis
+
+# ?  ( addr -- )  type the cell at addr
+#   : ?  @ . ;
+align 4
+n_ques:
+    db 0x81
+    string ?
+    bytes 0x20 0xA0
+    dw n_dot
+ques:
+    dw docol
+    dw at
+    dw dot
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# VLIST
+
+# VLIST  ( -- )  type the names of the CONTEXT vocabulary; a key stops it
+#   : VLIST  128 OUT ! CONTEXT @ @
+#            BEGIN OUT @ C/L > IF CR 0 OUT ! THEN
+#            DUP ID. SPACE SPACE PFA LFA @
+#            DUP 0= ?TERMINAL OR UNTIL DROP ;
+align 4
+n_vlist:
+last_nfa:
+    db 0x85
+    string VLIST
+    bytes 0x20 0xA0
+    dw n_ques
+vlist:
+    dw docol
+    dw lit
+    dw 128
+    dw out
+    dw store
+    dw cont
+    dw at
+    dw at
+vlist1:
+    dw out
+    dw at
+    dw csll
+    dw great
+    dw zbran
+    dw %offset(vlist2)
+    dw cr
+    dw zero
+    dw out
+    dw store
+vlist2:
+    dw dup
+    dw iddot
+    dw space
+    dw space
+    dw pfa
+    dw lfa
+    dw at
+    dw dup
+    dw zequ
+    dw qterm
+    dw orr
+    dw zbran
+    dw %offset(vlist1)
+    dw drop
+    dw semis

@@ -1,7 +1,7 @@
 # fig-FORTH for RISC-V
 #
 #   make          assemble figforth.bin (and figforth.labels, the addresses)
-#   make test     assemble, then run every word in the emulator
+#   make test     assemble, then run every word in the emulator, and type at it
 #   make flash    program the chip through a WCH-LinkE and restart it
 #   make term     the console: 115200 baud, Enter sends CR, Ctrl-A Ctrl-X quits
 
@@ -14,6 +14,7 @@ figforth.bin: figforth.asm listings.asm board.asm
 
 test:
 	python3 tests/test_nucleus.py
+	python3 tests/test_listings.py
 
 flash: figforth.bin
 	minichlink -w figforth.bin flash -b

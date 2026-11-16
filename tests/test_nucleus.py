@@ -91,7 +91,8 @@ def walk(image, nfa):
         nfa = link
     return words
 
-WORDS = walk(IMAGE, cell(L["boot_up"]))
+# The nucleus ends at S->D; the words after it are tested in test_listings.py.
+WORDS = walk(IMAGE, L["n_stod"])
 CFA = {name: cfa for name, nfa, cfa, b in WORDS}
 NFA = {name: nfa for name, nfa, cfa, b in WORDS}
 
@@ -171,24 +172,22 @@ def text(s, total=40):
 
 # ---------------------------------------------------------------- boot
 
-check("boot message", bytes(BOOTED.uart_out), b"\r\nfig-FORTH RISC-V nucleus\r\n")
+check("boot message", bytes(BOOTED.uart_out), b"\r\nfig-FORTH RISC-V\r\n")
 check("UP after COLD", BOOTED.x[3], UP)
 check("the user area holds boot_up",
       [peek(BOOTED, UP + CELL * i) for i in range(11)],
       [cell(L["boot_up"] + CELL * i) for i in range(11)])
-check("the return stack is empty in ABORT", BOOTED.x[4], R0)
+check("the return stack at the prompt: QUIT is in QUERY, in EXPECT, in its loop",
+      BOOTED.x[4], R0 - 4 * CELL)
+check("the body of FORTH is in RAM",
+      [peek(BOOTED, RAM), peek(BOOTED, RAM + CELL), peek(BOOTED, RAM + 2 * CELL)],
+      [0xA0202081, L["last_nfa"], 0])
 check("mtvec", BOOTED.csr.get(0x305), 3)
 check("sp", BOOTED.x[2], R0 - 64 * CELL)
 
-e = copy.deepcopy(BOOTED)
-e.uart_in = list(b"ab\rc")
-run_to(e, idle)
-check("ABORT echoes keys, and adds a line feed to a return",
-      bytes(e.uart_out[len(BOOTED.uart_out):]), b"ab\r\nc")
-
 # the RAM map: nothing overlaps
 tib, msp = cell(L["boot_up"] + 5 * CELL), R0 - 64 * CELL
-check("RAM map order", UP + 128 <= tib and tib + 96 <= msp - 24 * CELL and S0 == RAM + 0x2000, True)
+check("RAM map order", UP + 128 <= tib and tib + 96 <= msp - 24 * CELL and S0 == RAM + 0x2000 - 8 * CELL, True)
 
 # warm start keeps FENCE, DP and VOC-LINK, and puts the rest back
 e = copy.deepcopy(BOOTED)
@@ -204,7 +203,7 @@ e = copy.deepcopy(BOOTED)
 poke(e, UP + CELL * 9, 0x12345678)
 e.pc = L["origin"]
 run_to(e, idle)
-check("cold start resets DP", peek(e, UP + CELL * 9), RAM)
+check("cold start resets DP", peek(e, UP + CELL * 9), RAM + 3 * CELL)
 
 # the trap handler prints mcause and mepc
 e = copy.deepcopy(BOOTED)
@@ -224,7 +223,6 @@ MODEL = ["LIT", "EXECUTE", "BRANCH", "0BRANCH", "(LOOP)", "(+LOOP)", "(DO)", "I"
          "R>", "R", "0=", "0<", "+", "D+", "MINUS", "DMINUS", "OVER", "DROP", "SWAP",
          "DUP", "+!", "TOGGLE", "@", "C@", "!", "C!", "S->D"]
 check("the words, oldest first", [w[0] for w in reversed(WORDS)], MODEL)
-check("last_nfa is the newest word", L["last_nfa"], WORDS[0][1])
 for name, nfa, cfa, b in WORDS:
     want = {"I": CFA["R"] + CELL, "DROP": L["pop"]}.get(name, cfa + CELL)
     check("code field of " + name, cell(cfa), want)

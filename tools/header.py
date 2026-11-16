@@ -23,6 +23,10 @@ import sys
 
 CELL = 4
 
+# Characters that `string` takes as they are. A name with any other character
+# (# " ' , or a null) is written as numbers.
+PLAIN = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-*/<>=!@?().[]:;")
+
 def header(name, label, prev, code=None, immediate=False):
     n = len(name)
     if not 1 <= n <= 31:
@@ -32,7 +36,13 @@ def header(name, label, prev, code=None, immediate=False):
     out = ["align %d" % CELL, "n_%s:" % label]
     out.append("    db 0x%02X" % (0x80 | (0x40 if immediate else 0) | n))
     pad = -(1 + n) % CELL                   # blanks after the name
-    if pad == 0:                            # the last character ends the field
+    if not set(name) <= PLAIN:
+        field = [ord(c) for c in name] + [0x20] * pad
+        field[-1] |= 0x80
+        shown = "".join(c if " " < c < "\x7f" else "^@" for c in name)
+        out.append("    bytes %s" % " ".join("0x%02X" % b for b in field))
+        out[-1] += " " * max(1, 28 - len(out[-1])) + "# " + shown
+    elif pad == 0:                          # the last character ends the field
         if n > 1:
             out.append("    string %s" % name[:-1])
         out.append("    db 0x%02X%s# %s + 0x80" % (ord(name[-1]) | 0x80, " " * 17, name[-1]))

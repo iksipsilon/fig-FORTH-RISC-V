@@ -1,7 +1,7 @@
 # fig-FORTH for RISC-V: the nucleus
 #
 # The CODE words of the fig-FORTH model (fig-FORTH Installation Manual,
-# Release 1, screens 12 to 34, 43, 55 and 56) in RISC-V assembly, for the
+# Release 1, screens 12 to 32, 55 and 56) in RISC-V assembly, for the
 # bronzebeard assembler. The model is the work of the Forth Interest Group:
 #
 #                      Through the courtesy of
@@ -70,13 +70,25 @@ CELL = 4
 
 include board.asm
 
-# RAM, from the top down. The dictionary grows up from RAM_BASE.
-S0_INIT  = RAM_BASE + RAM_SIZE          # data stack, 64 cells
+# RAM, from the top down. Above the data stack 8 cells are left free: a word
+# that takes more than the stack holds then reads these, and not the address
+# after the last one of RAM, where the chip may trap.
+S0_INIT  = RAM_BASE + RAM_SIZE - 8 * CELL   # data stack, 56 cells
 R0_INIT  = S0_INIT - 64 * CELL          # return stack, 64 cells
 MSP_INIT = R0_INIT - 64 * CELL          # machine stack, 24 cells
 TIB_INIT = MSP_INIT - 24 * CELL - 96    # terminal input buffer, 96 bytes
 UP_INIT  = TIB_INIT - 128               # user area, 32 cells
-DP_INIT  = RAM_BASE
+
+# RAM, from the bottom up: the body of the FORTH vocabulary (the kernel is in
+# flash and this must change with every new word), then the dictionary.
+FORTH_VOC = RAM_BASE                    # a name field that holds one blank,
+                                        # the newest word, the vocabulary link
+DP_INIT   = FORTH_VOC + 3 * CELL
+
+# docol docon dovar douse dodoe, the code that the code field of a colon
+# word, a constant, a variable, a user variable and a DOES> word points at,
+# are where the model has them: behind the ;CODE of the defining words, in
+# listings.asm.
 
 # User variables this file needs: offsets into the user area. The model's
 # offsets, doubled.
@@ -95,7 +107,8 @@ boot:
 # ---------------------------------------------------------------- SCR 12
 # COLD AND WARM ENTRY, USER PARAMETERS
 #
-# n +ORIGIN in the model is origin + 2 * n here.
+# n +ORIGIN is origin + n, with the offsets shown here. They are not the
+# model's: the cells from boot_up on are 4 bytes.
 align 4
 origin:
     j cold                      # +0x00  cold start
@@ -115,7 +128,7 @@ boot_up:                        # the cells COLD copies to the user area
     dw 0                        # +0x2C  initial WARNING: 0, no disc yet
     dw DP_INIT                  # +0x30  initial FENCE
     dw DP_INIT                  # +0x34  cold start value for DP
-    dw 0                        # +0x38  cold start value for VOC-LINK
+    dw FORTH_VOC + 2*CELL       # +0x38  cold start value for VOC-LINK
 
 
 # ---------------------------------------------------------------- SCR 13
@@ -990,7 +1003,6 @@ cstor:
 # S->D  ( n -- d )  extend a number to a double number
 align 4
 n_stod:
-last_nfa:
     db 0x84
     string S->D
     bytes 0x20 0x20 0xA0
@@ -1002,50 +1014,22 @@ stod:
     j push
 
 
-# ------------------------------------------------- SCR 33, 34 and 43
-# THE CODE AFTER ;CODE
-#
-# What the code field of a word made by a defining word points at. Each of
-# these gets W = the code field address from NEXT; the parameter field is at
-# CELL(W). In the model they stand after the ;CODE of : CONSTANT VARIABLE
-# USER and DOES> and they have no names.
-
-align 4
-docol:                          # a colon definition: nest into its thread
-    addi RSP, RSP, -CELL
-    sw IP, 0(RSP)
-    addi IP, W, CELL
-    j next
-
-docon:                          # a CONSTANT: push its parameter
-    lw a1, CELL(W)
-    j push
-
-dovar:                          # a VARIABLE: push the address of its parameter
-    addi a1, W, CELL
-    j push
-
-douse:                          # a USER variable: its parameter is an offset
-    lw a1, CELL(W)              # into the user area
-    add a1, a1, UP
-    j push
-
-dodoe:                          # a word made by <BUILDS ... DOES>: its first
-    addi RSP, RSP, -CELL        # parameter is the address of the thread after
-    sw IP, 0(RSP)               # DOES>. Nest into that, and push the address
-    lw IP, CELL(W)              # of the parameters behind it.
-    addi a1, W, 2*CELL
-    j push
-
-
 # ---------------------------------------------------------------- SCR 55
 # COLD START
 #
-# The code of COLD. Its header comes with the high-level words; the model also
-# sets the head of the FORTH vocabulary here, from the first cell of boot_up.
+# The code of COLD; its header is in listings.asm. As in the model, a cold
+# start also sets the newest word of the FORTH vocabulary, from the first cell
+# of boot_up. Here it fills the whole body of FORTH, which is in RAM.
 
-cold:                           # all eleven cells of boot_up, VOC-LINK included
-    li a3, 11*CELL
+cold:
+    li a1, FORTH_VOC
+    li a2, 0xA0202081           # the name field: 81 20 20 A0, one blank
+    sw a2, 0(a1)
+    li a2, boot_up
+    lw a2, 0(a2)
+    sw a2, CELL(a1)             # the newest word
+    sw zero, 2*CELL(a1)         # no vocabulary before this one
+    li a3, 11*CELL              # all eleven cells of boot_up, VOC-LINK included
     j cold1
 warm:                           # eight, up to WARNING: FENCE, DP and VOC-LINK
     li a3, 8*CELL               # stay
