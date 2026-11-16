@@ -1,0 +1,583 @@
+#!/usr/bin/env python3
+# Minimal RV32EC + Zmmul + Zicsr emulator, just enough to run fiveforths.bin
+# Flash at 0x00000000, 8K RAM at 0x20000000, USART1 at 0x40013800, SysTick at 0xE000F000.
+import sys
+
+M32 = 0xFFFFFFFF
+def sx(v, bits):
+    if v & (1 << (bits-1)): v -= (1 << bits)
+    return v
+
+class Emu:
+    def __init__(self, flash, uart_in):
+        # pad with 0xFF: that is what erased flash reads (the source lines
+        # count on it: a 0xFF byte is skipped when lines are loaded)
+        self.f = bytearray(flash) + bytearray([0xFF] * (0x10000 - len(flash)))
+        self.ram = bytearray(8*1024)
+        self.x = [0]*16
+        self.pc = 0
+        self.csr = {}
+        self.uart_in = list(uart_in)
+        self.uart_out = []
+        self.trace = []          # ring buffer of (pc, instr_word)
+        self.stores = []         # ring of (pc, addr, val)
+        self.fault = None
+        # FPEC (flash controller) model, CH32V006 (reference manual V1.5,
+        # chapter 18): KEYR/MODEKEYR unlock sequences, fast 256-byte page
+        # erase (FTER + STRT) and fast 256-byte page programming (FTPG:
+        # BUFRST, 64 x (word store + BUFLOAD), FLASH_ADDR, STRT). Halfword
+        # programming (PG) faults: it reportedly corrupts neighbouring
+        # halfwords on V006 silicon. Programming a page that is not erased
+        # faults too (erase first). Wrong sequences fault, so the emulator
+        # catches a botched flash dance the way it catches alignment traps.
+        self.fpec = {'lock': True, 'flock': True, 'ctlr': 0, 'faddr': 0,
+                     'kstage': 0, 'mkstage': 0,
+                     'buf': None,       # 256-byte page buffer after BUFRST
+                     'loaded': set(),   # word offsets loaded since BUFRST
+                     'bufpage': None,   # page the loaded words belong to
+                     'latch': None}     # (page offset, word) awaiting BUFLOAD
+        # a worn-out flash byte for the tests: {flash offset: the value it
+        # reads after its page was programmed}
+        self.flash_stuck = {}
+        self.gpiod_in = 0        # GPIOD input pins (bit 4 = skip button: line 0 is not loaded)
+        self.gpiod_cfglr = 0x44444444   # GPIOD_CFGLR reset value: all floating inputs
+        self.gpiod_out = 0              # GPIOD output latch (OUTDR)
+        # WeAct board with solder bridges SB3/SB4 closed: PD4 is joined to PD5.
+        # PD5 is high as the idle UART TX and, released as an input, through
+        # the WCH-LinkE's RX pull-up, so PD4 reads low only while PD5 is a
+        # general-purpose output driving 0 (checked on the board)
+        self.weact_bridge = False
+        # The WCH-LinkE powering up with the board: for the board's first
+        # linke_starting bytes on USART1 the LinkE's TX does not drive PD6
+        # (the console RX) yet. A floating PD6 (CNF6:MODE6 = 0b0100) then
+        # picks up PD5 (the console TX) on the neighbouring wire, so each byte
+        # sent is also received; the receiver holds one byte and loses those
+        # that come while it is full. On the board, with the LinkE's TX
+        # disconnected, the REPL's echo of what it heard ran on for 135-180
+        # bytes of 's'; with PD6's pull-up nothing came back.
+        self.linke_starting = 0
+        # the machine stack, (lowest address, top): when set, an interrupt
+        # taken with sp outside it, or with no room for the 48-byte HPE frame,
+        # faults. min_sp is the lowest sp any frame has reached.
+        self.mstack = None
+        self.min_sp = None
+        # SysTick (reference manual 6.5.4): a 32-bit up-counter on HCLK/8
+        # (STCLK = 0) or HCLK (STCLK = 1). The model counts one HCLK cycle per
+        # instruction, so its times are not the chip's; the order of events
+        # and the wrap are. CTLR (STE, STCLK) and CNTL are modelled; the
+        # interrupt (STIE, SWIE), auto-reload (STRE), SR and CMPLR are not,
+        # and fault.
+        self.cycles = 0          # instructions executed so far
+        self.stk_ctlr = 0        # STK_CTLR
+        self.stk_cnt0 = 0        # the count at cycle stk_at
+        self.stk_at = 0
+        # SysTick's compare match and its interrupt, the only one modelled.
+        # CNTIF (STK_SR bit 0) is set when the count reaches CMPLR; with STIE,
+        # PFIC_IENR0 bit 12 and mstatus.MIE the core takes interrupt 12:
+        # HPE (INTSYSCR bit 0, processor manual 3.4) stores x1, x5-x7,
+        # x10-x15 at sp-4 ... sp-40 and moves sp down 48 bytes; mepc, mcause,
+        # MPIE = MIE, MIE = 0; the handler address comes from the vector
+        # table (mtvec MODE = 11). mret undoes it. Nesting, HPE off and other
+        # mtvec modes fault.
+        self.stk_cmp = 0         # STK_CMPLR
+        self.stk_cntif = 0       # STK_SR bit 0
+        self.stk_match_at = None # the cycle at which the count next equals CMPLR
+        self.pfic_ienr0 = 0      # PFIC_IENR0: bit n lets interrupt n through
+        self.hpe_depth = 0       # HPE frames pushed and not yet popped by mret
+        self.irqs_taken = 0
+        # The modem line: USART2 (reference manual 14.8) received by DMA1
+        # channel 7 (8.3). A test puts the modem's bytes in uart2_in; one
+        # arrives every uart2_period instructions (2083: one byte at 115200
+        # baud and 24 MHz), but only once USART2 is clocked (RCC), routed to
+        # PD2/PD3 (AFIO remap 011) and receiving (UE, RE) with DMAR, and
+        # channel 7 copies from its data register; until then bytes wait.
+        # They land at MADDR7 + (count - CNTR7), round again if CIRC. Bytes
+        # written to USART2_DATAR go to uart2_out, and back into uart2_in if
+        # uart2_loopback (a wire from PD2 to PD3) and PD2 is an alternate
+        # function output with TE on. TXE always reads 1. Receiving without
+        # DMA, USART2 interrupts and the other DMA modes are not modelled
+        # and fault; the other DMA channels are ignored as before.
+        self.uart2_in = []
+        self.uart2_out = []
+        self.uart2_loopback = False
+        self.uart2_period = 2083
+        self.uart2_next = 0
+        self.rcc = {0x40021014: 0x4, 0x40021018: 0}  # HBPCENR (SRAMEN at reset), PB2PCENR
+        self.afio_pcfr1 = 0
+        self.usart2 = {0x08: 0, 0x0C: 0, 0x14: 0}    # BRR, CTLR1, CTLR3
+        self.dma7 = {'cfgr': 0, 'cntr': 0, 'n': 0, 'paddr': 0, 'maddr': 0}
+
+    def uart2_listening(self):
+        pb2, c1 = self.rcc[0x40021018], self.usart2[0x0C]
+        return (pb2 & (1 << 13) and pb2 & 1 and (self.afio_pcfr1 >> 20) & 7 == 3
+                and c1 & (1 << 13))
+
+    def uart2_deliver(self):
+        # the next modem byte reaches PD3
+        self.uart2_next = self.cycles + self.uart2_period
+        if not (self.uart2_listening() and self.usart2[0x0C] & (1 << 2)):
+            return                                  # nobody listens on PD3 yet
+        d = self.dma7
+        if not (self.usart2[0x14] & 0x40 and self.rcc[0x40021014] & 1
+                and d['cfgr'] & 1 and d['paddr'] == 0x40004404 and d['cntr']):
+            self.fault = ("uart2-rx-without-dma", self.pc, 0x40004404); raise RuntimeError()
+        off = d['n'] - d['cntr'] if d['cfgr'] & 0x80 else 0     # MINC
+        self.w8(d['maddr'] + off, self.uart2_in.pop(0))
+        d['cntr'] -= 1
+        if d['cntr'] == 0 and d['cfgr'] & 0x20:                  # CIRC: reload
+            d['cntr'] = d['n']
+
+    def stk_cnt(self):
+        if not self.stk_ctlr & 1:                   # STE = 0: stopped
+            return self.stk_cnt0
+        div = 1 if self.stk_ctlr & 4 else 8         # STCLK
+        return (self.stk_cnt0 + (self.cycles - self.stk_at) // div) & M32
+
+    def stk_rearm(self):
+        # the first cycle from now at which the count equals CMPLR
+        if not self.stk_ctlr & 1:
+            self.stk_match_at = None; return
+        div = 1 if self.stk_ctlr & 4 else 8
+        k = (self.cycles - self.stk_at) // div + ((self.stk_cmp - self.stk_cnt()) & M32)
+        self.stk_match_at = self.stk_at + k * div
+
+    def take_irq(self, n):
+        mtvec, ms = self.csr.get(0x305, 0), self.csr.get(0x300, 0)
+        if not self.csr.get(0x804, 0) & 1 or self.csr.get(0x804, 0) & 2 or mtvec & 3 != 3:
+            self.fault = ("irq-setup-unmodelled", self.pc, self.csr.get(0x804, 0)); raise RuntimeError()
+        sp = self.x[2]
+        if self.mstack and not self.mstack[0] + 48 <= sp <= self.mstack[1]:
+            self.fault = ("irq-sp-outside-machine-stack", self.pc, sp); raise RuntimeError()
+        if self.min_sp is None or sp - 48 < self.min_sp:
+            self.min_sp = sp - 48
+        for off, r in zip(range(4, 44, 4), (1, 5, 6, 7, 10, 11, 12, 13, 14, 15)):
+            self.w32((sp - off) & M32, self.x[r])
+        self.x[2] = (sp - 48) & M32
+        self.hpe_depth += 1
+        self.csr[0x300] = (ms & ~0x88) | (0x80 if ms & 8 else 0)    # MPIE = MIE, MIE = 0
+        self.csr[0x341] = self.pc                                  # mepc
+        self.csr[0x342] = 0x80000000 | n                           # mcause: interrupt n
+        self.pc = self.r32((mtvec & ~3) + 4 * n)
+        self.irqs_taken += 1
+
+    def _flash_pa(self, a):
+        # normalize a flash address (0x00000000 alias or 0x08000000 base)
+        if 0x08000000 <= a < 0x08010000: return a - 0x08000000
+        if a < 0x10000: return a
+        return None
+
+    def r8(self, a):
+        if a < 0x10000: return self.f[a]
+        if a >= 0x08000000 and a < 0x08010000: return self.f[a-0x08000000]
+        if 0x20000000 <= a < 0x20002000: return self.ram[a-0x20000000]
+        if a == 0x40013800:  # STATR: RXNE(5) if input pending, TXE(7) always
+            return (1<<7) | ((1<<5) if self.uart_in else 0)
+        if a == 0x40013804:  # DATAR read
+            return (self.uart_in.pop(0) & 0xFF) if self.uart_in else 0
+        if 0x40000000 <= a < 0x50000000: return 0
+        self.fault = ("load", self.pc, a); raise RuntimeError()
+    def r32(self, a):
+        if a & 3:
+            self.fault = ("misaligned-load", self.pc, a); raise RuntimeError()
+        if a == 0x40013800:
+            return (1<<7) | ((1<<5) if self.uart_in else 0)
+        if a == 0x40013804:
+            return (self.uart_in.pop(0) & 0xFF) if self.uart_in else 0
+        if a == 0x40011400:  # GPIOD_CFGLR
+            return self.gpiod_cfglr
+        if a == 0x4001140C:  # GPIOD_OUTDR: the output latch (pull-up/down for inputs)
+            return self.gpiod_out
+        if a == 0x40011408:  # GPIOD_INDR
+            nib5 = (self.gpiod_cfglr >> 20) & 0xF         # CNF5:MODE5
+            pd5_low = (nib5 & 3) and not (nib5 & 8) and not (self.gpiod_out >> 5) & 1
+            return self.gpiod_in | (0x10 if self.weact_bridge and not pd5_low else 0)
+        if a == 0x4002200C:  # FLASH_STATR: never busy (ops complete instantly)
+            return 0
+        if a == 0x40022010:  # FLASH_CTLR
+            return self.fpec['ctlr']
+        if a == 0xE000F000:  # STK_CTLR
+            return self.stk_ctlr
+        if a == 0xE000F008:  # STK_CNTL
+            return self.stk_cnt()
+        if a == 0xE000F004:  # STK_SR: CNTIF
+            return self.stk_cntif
+        if a == 0xE000F010:  # STK_CMPLR
+            return self.stk_cmp
+        if 0xE000F000 <= a < 0xE000F020:  # the rest of the block: not modelled
+            self.fault = ("stk-unmodelled", self.pc, a); raise RuntimeError()
+        if a in self.rcc:    # RCC_HBPCENR, RCC_PB2PCENR
+            return self.rcc[a]
+        if a == 0x4001000C:  # AFIO_PCFR1
+            return self.afio_pcfr1
+        if a == 0x40004400:  # USART2_STATR: TXE and TC (receiving goes through DMA)
+            return 0xC0
+        if 0x40004400 <= a < 0x4000441C:  # USART2 BRR, CTLR1, CTLR3; DATAR etc. fault
+            if a - 0x40004400 not in self.usart2:
+                self.fault = ("uart2-unmodelled", self.pc, a); raise RuntimeError()
+            return self.usart2[a - 0x40004400]
+        if 0x40020080 <= a < 0x40020090:  # DMA channel 7: CFGR7 CNTR7 PADDR7 MADDR7
+            return self.dma7[('cfgr', 'cntr', 'paddr', 'maddr')[(a - 0x40020080) >> 2]]
+        return self.r8(a) | self.r8(a+1)<<8 | self.r8(a+2)<<16 | self.r8(a+3)<<24
+    def r16(self, a):
+        if a & 1:
+            self.fault = ("misaligned-load16", self.pc, a); raise RuntimeError()
+        return self.r8(a) | self.r8(a+1)<<8
+    def uart1_send(self, v):
+        # a byte written to USART1_DATAR (see linke_starting)
+        self.uart_out.append(v)
+        if self.linke_starting > 0:
+            self.linke_starting -= 1
+            if (self.gpiod_cfglr >> 24) & 0xF == 0b0100 and not self.uart_in:
+                self.uart_in.append(v)
+
+    def w8(self, a, v):
+        v &= 0xFF
+        if 0x20000000 <= a < 0x20002000: self.ram[a-0x20000000] = v; return
+        if a == 0x40013804: self.uart1_send(v); return
+        if 0x40000000 <= a < 0x50000000: return  # RCC/GPIO etc: ignore
+        self.fault = ("store", self.pc, a); raise RuntimeError()
+    def w32(self, a, v):
+        if a & 3:
+            self.fault = ("misaligned-store", self.pc, a); raise RuntimeError()
+        self.stores.append((self.pc, a, v & M32)); self.stores = self.stores[-16:]
+        if a == 0x40013804: self.uart1_send(v & 0xFF); return
+        if a == 0xE000F000:  # STK_CTLR: STE (bit 0), STIE (bit 1), STCLK (bit 2)
+            if v & ~0x7 & M32:
+                self.fault = ("stk-unmodelled", self.pc, a); raise RuntimeError()
+            self.stk_cnt0, self.stk_at = self.stk_cnt(), self.cycles  # keep the count
+            self.stk_ctlr = v & M32; self.stk_rearm(); return
+        if a == 0xE000F008:  # STK_CNTL: the counter goes on from the written value
+            self.stk_cnt0, self.stk_at = v & M32, self.cycles; self.stk_rearm(); return
+        if a == 0xE000F004:  # STK_SR: writing 0 clears CNTIF, writing 1 does nothing
+            if not v & 1: self.stk_cntif = 0
+            return
+        if a == 0xE000F010:  # STK_CMPLR
+            self.stk_cmp = v & M32; self.stk_rearm(); return
+        if a == 0xE000E100:  # PFIC_IENR0: write 1 to let interrupt n through (only 12 here)
+            if v & ~(1 << 12) & M32:
+                self.fault = ("pfic-unmodelled", self.pc, v); raise RuntimeError()
+            self.pfic_ienr0 |= v & M32; return
+        if 0xE000F000 <= a < 0xE000F020:  # the rest of the block: not modelled
+            self.fault = ("stk-unmodelled", self.pc, a); raise RuntimeError()
+        if a in self.rcc:    # RCC_HBPCENR, RCC_PB2PCENR
+            self.rcc[a] = v & M32; return
+        if a == 0x4001000C:  # AFIO_PCFR1
+            self.afio_pcfr1 = v & M32; return
+        if a == 0x40004404:  # USART2_DATAR: send a byte to the modem
+            self.uart2_out.append(v & 0xFF)
+            pd2 = (self.gpiod_cfglr >> 8) & 0xF
+            if (self.uart2_loopback and self.uart2_listening()
+                    and self.usart2[0x0C] & (1 << 3) and pd2 & 0b1001 == 0b1001):
+                if not self.uart2_in:
+                    self.uart2_next = self.cycles + self.uart2_period
+                self.uart2_in.append(v & 0xFF)
+            return
+        if 0x40004400 <= a < 0x4000441C:  # USART2 BRR, CTLR1 (UE TE RE), CTLR3 (DMAR)
+            off, v = a - 0x40004400, v & M32
+            if (off not in self.usart2 or (off == 0x0C and v & ~0x200C)
+                    or (off == 0x14 and v & ~0x40)):
+                self.fault = ("uart2-unmodelled", self.pc, a); raise RuntimeError()
+            self.usart2[off] = v; return
+        if a == 0x40020080:  # DMA_CFGR7: EN, CIRC, MINC (and PL, no effect)
+            if v & ~0x30A1 & M32:
+                self.fault = ("dma-unmodelled", self.pc, a); raise RuntimeError()
+            self.dma7['cfgr'] = v & M32; return
+        if a == 0x40020084:  # DMA_CNTR7: written only while the channel is off
+            if self.dma7['cfgr'] & 1:
+                self.fault = ("dma-cntr-while-on", self.pc, a); raise RuntimeError()
+            self.dma7['cntr'] = self.dma7['n'] = v & 0xFFFF; return
+        if a == 0x40020088:  # DMA_PADDR7
+            self.dma7['paddr'] = v & M32; return
+        if a == 0x4002008C:  # DMA_MADDR7
+            self.dma7['maddr'] = v & M32; return
+        if a == 0x40022004:  # FLASH_KEYR: KEY1 then KEY2 unlocks programming
+            if v == 0x45670123 and self.fpec['kstage'] == 0:
+                self.fpec['kstage'] = 1
+            elif v == 0xCDEF89AB and self.fpec['kstage'] == 1:
+                self.fpec['lock'] = False; self.fpec['kstage'] = 0
+            else:
+                self.fault = ("flash-keyr-seq", self.pc, v); raise RuntimeError()
+            return
+        if a == 0x40022024:  # FLASH_MODEKEYR: same sequence unlocks fast modes
+            if v == 0x45670123 and self.fpec['mkstage'] == 0:
+                self.fpec['mkstage'] = 1
+            elif v == 0xCDEF89AB and self.fpec['mkstage'] == 1:
+                self.fpec['flock'] = False; self.fpec['mkstage'] = 0
+            else:
+                self.fault = ("flash-modekeyr-seq", self.pc, v); raise RuntimeError()
+            return
+        if a == 0x40011400:  # GPIOD_CFGLR
+            self.gpiod_cfglr = v & M32
+            return
+        if a == 0x4001140C:  # GPIOD_OUTDR
+            self.gpiod_out = v & 0xFFFF
+            return
+        if a == 0x40011410:  # GPIOD_BSHR: low half sets, high half clears
+            self.gpiod_out = (self.gpiod_out | (v & 0xFFFF)) & ~((v >> 16) & 0xFFFF)
+            return
+        if a == 0x40011414:  # GPIOD_BCR: clears
+            self.gpiod_out &= ~(v & 0xFFFF)
+            return
+        if a == 0x40022014:  # FLASH_ADDR
+            self.fpec['faddr'] = v & M32
+            return
+        if a == 0x40022010:  # FLASH_CTLR
+            v &= M32
+            fp = self.fpec
+            # BUFRST, BUFLOAD and STRT act once and read back as 0
+            fp['ctlr'] = v & ~((1 << 19) | (1 << 18) | (1 << 6))
+            if v & 1:                            # PG: not on the V006
+                self.fault = ("flash-pg", self.pc, v); raise RuntimeError()
+            ftpg, fter = (v >> 16) & 1, (v >> 17) & 1
+            if (ftpg or fter) and (fp['lock'] or fp['flock']):
+                self.fault = ("flash-locked", self.pc, v); raise RuntimeError()
+            if (v >> 19) & 1:                    # BUFRST: clear the page buffer
+                if not ftpg:
+                    self.fault = ("flash-bufrst-no-ftpg", self.pc, v); raise RuntimeError()
+                fp['buf'] = bytearray([0xFF] * 256)
+                fp['loaded'], fp['bufpage'], fp['latch'] = set(), None, None
+            if (v >> 18) & 1:                    # BUFLOAD: latched word -> buffer
+                if not ftpg or fp['buf'] is None or fp['latch'] is None:
+                    self.fault = ("flash-bufload-seq", self.pc, v); raise RuntimeError()
+                off, word = fp['latch']
+                fp['buf'][off:off+4] = word.to_bytes(4, "little")
+                fp['loaded'].add(off); fp['latch'] = None
+            if (v >> 6) & 1:                     # STRT
+                pa = self._flash_pa(fp['faddr'])
+                if pa is None or (pa & 255):
+                    self.fault = ("flash-page-addr", self.pc, fp['faddr']); raise RuntimeError()
+                if fter and not ftpg:            # erase one 256-byte page
+                    for i in range(256): self.f[pa+i] = 0xFF
+                elif ftpg and not fter:          # program one 256-byte page
+                    if fp['buf'] is None or len(fp['loaded']) != 64 or fp['bufpage'] != pa:
+                        self.fault = ("flash-ftpg-buffer", self.pc, pa); raise RuntimeError()
+                    if any(self.f[pa+i] != 0xFF for i in range(256)):
+                        self.fault = ("flash-ftpg-not-erased", self.pc, pa); raise RuntimeError()
+                    self.f[pa:pa+256] = fp['buf']
+                    fp['buf'] = None
+                    for o, b in self.flash_stuck.items():
+                        if pa <= o < pa + 256: self.f[o] = b
+                else:
+                    self.fault = ("flash-strt-mode", self.pc, v); raise RuntimeError()
+            return
+        pa = self._flash_pa(a)
+        if pa is not None:
+            # a word store into flash only latches data for the FTPG buffer
+            fp = self.fpec
+            if not (fp['ctlr'] >> 16) & 1 or fp['buf'] is None or fp['latch'] is not None:
+                self.fault = ("flash-write-no-ftpg", self.pc, a); raise RuntimeError()
+            page = pa & ~255
+            if fp['bufpage'] is None: fp['bufpage'] = page
+            if page != fp['bufpage']:
+                self.fault = ("flash-ftpg-page-mix", self.pc, a); raise RuntimeError()
+            fp['latch'] = (pa & 255, v & M32)
+            return
+        for i in range(4): self.w8(a+i, (v >> (8*i)) & 0xFF)
+    def w16(self, a, v):
+        if a & 1:
+            self.fault = ("misaligned-store16", self.pc, a); raise RuntimeError()
+        pa = self._flash_pa(a)
+        if pa is not None:
+            # halfword store into flash = standard (PG) programming: not on the V006
+            self.fault = ("flash-write16", self.pc, a); raise RuntimeError()
+        for i in range(2): self.w8(a+i, (v >> (8*i)) & 0xFF)
+
+    def wr(self, rd, v):
+        if rd: self.x[rd] = v & M32
+
+    def step(self):
+        pc = self.pc
+        self.cycles += 1         # SysTick model: one HCLK cycle per instruction
+        if self.uart2_in and self.cycles >= self.uart2_next:
+            self.uart2_deliver()     # the next modem byte arrives
+        if self.stk_match_at is not None and self.cycles >= self.stk_match_at:
+            self.stk_cntif = 1       # the count reached CMPLR; next match a whole wrap later
+            self.stk_match_at += (1 << 32) * (1 if self.stk_ctlr & 4 else 8)
+        if (self.stk_cntif and self.stk_ctlr & 2 and self.pfic_ienr0 & (1 << 12)
+                and self.csr.get(0x300, 0) & 8):
+            self.take_irq(12)        # the tick interrupt
+            pc = self.pc
+        lo = self.r16(pc)
+        self.trace.append(pc); self.trace = self.trace[-64:]
+        if (lo & 3) != 3:
+            self.step_c(lo); return
+        inst = lo | (self.r16(pc+2) << 16)
+        op = inst & 0x7F
+        rd = (inst >> 7) & 0x1F; f3 = (inst >> 12) & 7
+        rs1 = (inst >> 15) & 0x1F; rs2 = (inst >> 20) & 0x1F
+        f7 = inst >> 25
+        if op in (0x33,) and (rd > 15 or rs1 > 15 or rs2 > 15):
+            self.fault = ("rv32e-reg", pc, inst); raise RuntimeError()
+        X = self.x
+        if op == 0x37: self.wr(rd, inst & 0xFFFFF000)                       # lui
+        elif op == 0x17: self.wr(rd, (pc + (inst & 0xFFFFF000)) & M32)      # auipc
+        elif op == 0x6F:                                                    # jal
+            imm = sx(((inst>>31)<<20)|(((inst>>12)&0xFF)<<12)|(((inst>>20)&1)<<11)|(((inst>>21)&0x3FF)<<1), 21)
+            self.wr(rd, pc+4); self.pc = (pc + imm) & M32; return
+        elif op == 0x67:                                                    # jalr
+            t = (X[rs1] + sx(inst>>20, 12)) & ~1 & M32
+            self.wr(rd, pc+4); self.pc = t; return
+        elif op == 0x63:                                                    # branches
+            imm = sx(((inst>>31)<<12)|(((inst>>7)&1)<<11)|(((inst>>25)&0x3F)<<5)|(((inst>>8)&0xF)<<1), 13)
+            a, b = X[rs1], X[rs2]; sa, sb = sx(a,32), sx(b,32)
+            take = {0: a==b, 1: a!=b, 4: sa<sb, 5: sa>=sb, 6: a<b, 7: a>=b}[f3]
+            self.pc = (pc + imm) & M32 if take else pc+4; return
+        elif op == 0x03:                                                    # loads
+            a = (X[rs1] + sx(inst>>20, 12)) & M32
+            if f3 == 0: self.wr(rd, sx(self.r8(a),8) & M32)
+            elif f3 == 1: self.wr(rd, sx(self.r16(a),16) & M32)
+            elif f3 == 2: self.wr(rd, self.r32(a))
+            elif f3 == 4: self.wr(rd, self.r8(a))
+            elif f3 == 5: self.wr(rd, self.r16(a))
+        elif op == 0x23:                                                    # stores
+            imm = sx(((inst>>25)<<5) | ((inst>>7)&0x1F), 12)
+            a = (X[rs1] + imm) & M32
+            if f3 == 0: self.w8(a, X[rs2])
+            elif f3 == 1: self.w16(a, X[rs2])
+            elif f3 == 2: self.w32(a, X[rs2])
+        elif op == 0x13:                                                    # alu-imm
+            imm = sx(inst>>20, 12); a = X[rs1]
+            if f3 == 0: self.wr(rd, a + imm)
+            elif f3 == 2: self.wr(rd, 1 if sx(a,32) < imm else 0)
+            elif f3 == 3: self.wr(rd, 1 if a < (imm & M32) else 0)
+            elif f3 == 4: self.wr(rd, a ^ imm)
+            elif f3 == 6: self.wr(rd, a | imm)
+            elif f3 == 7: self.wr(rd, a & imm)
+            elif f3 == 1: self.wr(rd, a << (rs2))
+            elif f3 == 5:
+                sh = rs2
+                self.wr(rd, (sx(a,32) >> sh) & M32 if (f7 & 0x20) else a >> sh)
+        elif op == 0x33:                                                    # alu-reg
+            a, b = X[rs1], X[rs2]
+            if f7 == 1:
+                if f3 == 0: self.wr(rd, (a*b) & M32)                        # mul (Zmmul)
+                else: self.fault = ("no-div", pc, inst); raise RuntimeError()
+            elif f3 == 0: self.wr(rd, (a - b) if f7 == 0x20 else (a + b))
+            elif f3 == 1: self.wr(rd, a << (b & 31))
+            elif f3 == 2: self.wr(rd, 1 if sx(a,32) < sx(b,32) else 0)
+            elif f3 == 3: self.wr(rd, 1 if a < b else 0)
+            elif f3 == 4: self.wr(rd, a ^ b)
+            elif f3 == 5: self.wr(rd, (sx(a,32) >> (b&31)) & M32 if (f7 & 0x20) else a >> (b&31))
+            elif f3 == 6: self.wr(rd, a | b)
+            elif f3 == 7: self.wr(rd, a & b)
+        elif op == 0x73:                                                    # csr / mret
+            if inst == 0x30200073:  # mret: HPE restores the frame, MIE = MPIE
+                if self.hpe_depth:
+                    sp = (self.x[2] + 48) & M32
+                    for off, r in zip(range(4, 44, 4), (1, 5, 6, 7, 10, 11, 12, 13, 14, 15)):
+                        self.x[r] = self.r32((sp - off) & M32)
+                    self.x[2] = sp
+                    self.hpe_depth -= 1
+                ms = self.csr.get(0x300, 0)
+                self.csr[0x300] = (ms & ~0x8) | (0x8 if ms & 0x80 else 0) | 0x80
+                self.pc = self.csr.get(0x341, 0); return
+            csr = inst >> 20
+            old = self.csr.get(csr, 0)
+            src = rs1 if f3 >= 5 else X[rs1]   # imm vs reg forms
+            if f3 & 3 == 1: self.csr[csr] = src
+            elif f3 & 3 == 2: self.csr[csr] = old | src
+            elif f3 & 3 == 3: self.csr[csr] = old & ~src
+            self.wr(rd, old)
+        elif op == 0x0F: pass                                               # fence
+        else:
+            self.fault = ("illegal", pc, inst); raise RuntimeError()
+        self.pc = pc + 4
+
+    def step_c(self, i):
+        pc = self.pc; X = self.x
+        q = i & 3; f3 = (i >> 13) & 7
+        r_ = lambda n: 8 + n
+        if i == 0: self.fault = ("c.unimp", pc, i); raise RuntimeError()
+        if q == 0:
+            rdp = r_((i>>2)&7); rs1p = r_((i>>7)&7)
+            if f3 == 0:  # c.addi4spn
+                imm = (((i>>7)&0xF)<<6)|(((i>>11)&3)<<4)|(((i>>5)&1)<<3)|(((i>>6)&1)<<2)
+                self.wr(rdp, X[2] + imm)
+            elif f3 == 2:  # c.lw
+                imm = (((i>>10)&7)<<3)|(((i>>6)&1)<<2)|(((i>>5)&1)<<6)
+                self.wr(rdp, self.r32((X[rs1p]+imm) & M32))
+            elif f3 == 6:  # c.sw
+                imm = (((i>>10)&7)<<3)|(((i>>6)&1)<<2)|(((i>>5)&1)<<6)
+                self.w32((X[rs1p]+imm) & M32, X[rdp])
+            else: self.fault = ("c?", pc, i); raise RuntimeError()
+        elif q == 1:
+            if f3 == 0:  # c.addi
+                rd = (i>>7)&0x1F; imm = sx((((i>>12)&1)<<5)|((i>>2)&0x1F), 6)
+                self.wr(rd, X[rd] + imm)
+            elif f3 == 1:  # c.jal
+                imm = self.cj_imm(i); self.wr(1, pc+2); self.pc = (pc+imm) & M32; return
+            elif f3 == 2:  # c.li
+                rd = (i>>7)&0x1F; self.wr(rd, sx((((i>>12)&1)<<5)|((i>>2)&0x1F), 6) & M32)
+            elif f3 == 3:
+                rd = (i>>7)&0x1F
+                if rd == 2:  # c.addi16sp
+                    imm = sx((((i>>12)&1)<<9)|(((i>>3)&3)<<7)|(((i>>5)&1)<<6)|(((i>>2)&1)<<5)|(((i>>6)&1)<<4), 10)
+                    self.wr(2, X[2] + imm)
+                else:        # c.lui
+                    self.wr(rd, sx((((i>>12)&1)<<17)|(((i>>2)&0x1F)<<12), 18) & M32)
+            elif f3 == 4:
+                rdp = r_((i>>7)&7); f2 = (i>>10)&3
+                if f2 == 0: self.wr(rdp, X[rdp] >> ((((i>>12)&1)<<5)|((i>>2)&0x1F)))
+                elif f2 == 1: self.wr(rdp, (sx(X[rdp],32) >> ((((i>>12)&1)<<5)|((i>>2)&0x1F))) & M32)
+                elif f2 == 2: self.wr(rdp, X[rdp] & (sx((((i>>12)&1)<<5)|((i>>2)&0x1F),6) & M32))
+                else:
+                    rs2p = r_((i>>2)&7); f = ((i>>12)&1, (i>>5)&3)
+                    if f == (0,0): self.wr(rdp, X[rdp]-X[rs2p])
+                    elif f == (0,1): self.wr(rdp, X[rdp]^X[rs2p])
+                    elif f == (0,2): self.wr(rdp, X[rdp]|X[rs2p])
+                    elif f == (0,3): self.wr(rdp, X[rdp]&X[rs2p])
+                    else: self.fault = ("c?", pc, i); raise RuntimeError()
+            elif f3 == 5:  # c.j
+                self.pc = (pc + self.cj_imm(i)) & M32; return
+            elif f3 in (6,7):  # c.beqz / c.bnez
+                rs1p = r_((i>>7)&7)
+                imm = sx((((i>>12)&1)<<8)|(((i>>5)&3)<<6)|(((i>>2)&1)<<5)|(((i>>10)&3)<<3)|(((i>>3)&3)<<1), 9)
+                t = (X[rs1p] == 0) if f3 == 6 else (X[rs1p] != 0)
+                self.pc = (pc+imm) & M32 if t else pc+2; return
+        elif q == 2:
+            if f3 == 0:  # c.slli
+                rd = (i>>7)&0x1F; self.wr(rd, X[rd] << ((((i>>12)&1)<<5)|((i>>2)&0x1F)))
+            elif f3 == 2:  # c.lwsp
+                rd = (i>>7)&0x1F
+                imm = (((i>>12)&1)<<5)|(((i>>4)&7)<<2)|(((i>>2)&3)<<6)
+                self.wr(rd, self.r32((X[2]+imm) & M32))
+            elif f3 == 4:
+                rs2 = (i>>2)&0x1F; rd = (i>>7)&0x1F
+                if (i>>12)&1 == 0:
+                    if rs2 == 0: self.pc = X[rd] & ~1; return            # c.jr
+                    else: self.wr(rd, X[rs2])                            # c.mv
+                else:
+                    if rs2 == 0 and rd == 0: self.fault=("ebreak",pc,i); raise RuntimeError()
+                    elif rs2 == 0: self.wr(1, pc+2); self.pc = X[rd] & ~1; return  # c.jalr
+                    else: self.wr(rd, X[rd] + X[rs2])                    # c.add
+            elif f3 == 6:  # c.swsp
+                rs2 = (i>>2)&0x1F
+                imm = (((i>>9)&0xF)<<2)|(((i>>7)&3)<<6)
+                self.w32((X[2]+imm) & M32, X[rs2])
+            else: self.fault = ("c?", pc, i); raise RuntimeError()
+        self.pc = pc + 2
+
+    def cj_imm(self, i):
+        return sx((((i>>12)&1)<<11)|(((i>>11)&1)<<4)|(((i>>9)&3)<<8)|(((i>>8)&1)<<10)|
+                  (((i>>7)&1)<<6)|(((i>>6)&1)<<7)|(((i>>3)&7)<<1)|(((i>>2)&1)<<5), 12)
+
+def run(uart_input, max_steps=3_000_000, watch=None, flash=None, gpiod_in=0):
+    if flash is None:
+        flash = open('fiveforths.bin','rb').read()
+    e = Emu(flash, uart_input.encode())
+    e.gpiod_in = gpiod_in
+    try:
+        for n in range(max_steps):
+            if watch: watch(e, n)
+            e.step()
+    except RuntimeError:
+        pass
+    return e
+
+if __name__ == '__main__':
+    e = run("d\n")
+    print("FAULT:", e.fault)
+    print("OUT:", bytes(e.uart_out))
+    print("PC trace (last 40):", [hex(p) for p in e.trace[-40:]])
+    print("regs:", {f"x{i}": hex(v) for i, v in enumerate(e.x)})
+    print("last stores:", [(hex(p), hex(a), hex(v)) for p, a, v in e.stores])
