@@ -96,20 +96,23 @@ def peek(e, a):
 # ---------------------------------------------------------------- the dictionary
 
 NAMES = [
-    ':', ';', 'CONSTANT', 'VARIABLE', 'USER', '0', '1', '2', '3', 'BL', 'C/L', '+ORIGIN', 'S0',
-    'R0', 'TIB', 'WIDTH', 'WARNING', 'FENCE', 'DP', 'VOC-LINK', 'BLK', 'IN', 'OUT', 'SCR',
-    'OFFSET', 'CONTEXT', 'CURRENT', 'STATE', 'BASE', 'DPL', 'FLD', 'CSP', 'R#', 'HLD', '1+',
-    '2+', 'HERE', 'ALLOT', 'ALIGN', ',', 'C,', '-', '=', '<', '>', 'ROT', 'SPACE',
-    '-DUP', 'TRAVERSE', 'LATEST', 'LFA', 'CFA', 'NFA', 'PFA', '!CSP', '?ERROR', '?COMP',
-    '?EXEC', '?PAIRS', '?CSP', '?LOADING', 'COMPILE', '[', ']', 'SMUDGE', 'HEX', 'DECIMAL',
-    '(;CODE)', ';CODE', '<BUILDS', 'DOES>', 'COUNT', 'TYPE', '-TRAILING', '(.")', '."',
-    'EXPECT', 'QUERY', '\x00', 'FILL', 'ERASE', 'BLANKS', 'HOLD', 'PAD', 'WORD', '(NUMBER)',
-    'NUMBER', '-FIND', '(ABORT)', 'ERROR', 'ID.', 'CREATE', '[COMPILE]', 'LITERAL', 'DLITERAL',
-    '?STACK', 'INTERPRET', 'IMMEDIATE', 'VOCABULARY', 'FORTH', 'DEFINITIONS', '(', 'QUIT',
-    'ABORT', 'COLD', '+-', 'D+-', 'ABS', 'DABS', 'MIN', 'MAX', 'M*', 'M/', '*', '/MOD', '/',
-    'MOD', '*/MOD', '*/', 'M/MOD', 'MESSAGE', "'", 'FORGET', 'BACK', 'BEGIN', 'ENDIF', 'THEN',
+    ':', ';', 'CONSTANT', 'VARIABLE', 'USER', '0', '1', '2', '3', 'BL', 'C/L', 'FIRST',
+    'LIMIT', 'B/BUF', 'B/SCR', '+ORIGIN', 'S0', 'R0', 'TIB', 'WIDTH', 'WARNING', 'FENCE', 'DP',
+    'VOC-LINK', 'BLK', 'IN', 'OUT', 'SCR', 'OFFSET', 'CONTEXT', 'CURRENT', 'STATE', 'BASE',
+    'DPL', 'FLD', 'CSP', 'R#', 'HLD', '1+', '2+', 'HERE', 'ALLOT', 'ALIGN', ',', 'C,', '-',
+    '=', '<', '>', 'ROT', 'SPACE', '-DUP', 'TRAVERSE', 'LATEST', 'LFA', 'CFA', 'NFA', 'PFA',
+    '!CSP', '?ERROR', '?COMP', '?EXEC', '?PAIRS', '?CSP', '?LOADING', 'COMPILE', '[', ']',
+    'SMUDGE', 'HEX', 'DECIMAL', '(;CODE)', ';CODE', '<BUILDS', 'DOES>', 'COUNT', 'TYPE',
+    '-TRAILING', '(.")', '."', 'EXPECT', 'QUERY', '\x00', 'FILL', 'ERASE', 'BLANKS', 'HOLD',
+    'PAD', 'WORD', '(NUMBER)', 'NUMBER', '-FIND', '(ABORT)', 'ERROR', 'ID.', 'CREATE',
+    '[COMPILE]', 'LITERAL', 'DLITERAL', '?STACK', 'INTERPRET', 'IMMEDIATE', 'VOCABULARY',
+    'FORTH', 'DEFINITIONS', '(', 'QUIT', 'ABORT', 'COLD', '+-', 'D+-', 'ABS', 'DABS', 'MIN',
+    'MAX', 'M*', 'M/', '*', '/MOD', '/', 'MOD', '*/MOD', '*/', 'M/MOD', 'USE', 'PREV', '+BUF',
+    'UPDATE', 'EMPTY-BUFFERS', 'DR0', 'BUFFER', 'BLOCK', '(LINE)', '.LINE', 'MESSAGE', 'LOAD',
+    '-->', 'LO', 'HI', 'BLOCK-WRITE', 'R/W', "'", 'FORGET', 'BACK', 'BEGIN', 'ENDIF', 'THEN',
     'DO', 'LOOP', '+LOOP', 'UNTIL', 'END', 'AGAIN', 'REPEAT', 'IF', 'ELSE', 'WHILE', 'SPACES',
-    '<#', '#>', 'SIGN', '#', '#S', 'D.R', 'D.', '.R', '.', '?', 'VLIST'
+    '<#', '#>', 'SIGN', '#', '#S', 'D.R', 'D.', '.R', '.', '?', 'LIST', 'INDEX', 'TRIAD',
+    'VLIST'
 ]
 
 def walk(image, nfa):
@@ -136,7 +139,7 @@ check("the words after the nucleus, oldest first", [w[0] for w in reversed(WORDS
 check("the nucleus is under them", len(WORDS), 46 + len(NAMES))
 IMMEDIATE = {":", ";", "[", ";CODE", '."', "\0", "[COMPILE]", "LITERAL", "DLITERAL", "FORTH", "(",
              "'", "BEGIN", "ENDIF", "THEN", "DO", "LOOP", "+LOOP", "UNTIL", "END", "AGAIN",
-             "REPEAT", "IF", "ELSE", "WHILE"}
+             "REPEAT", "IF", "ELSE", "WHILE", "-->"}
 check("the immediate words", {w[0] for w in WORDS if w[2] & 0x40}, IMMEDIATE)
 check("no thread or header is off the cell", len(IMAGE) % CELL, 0)
 
@@ -265,7 +268,8 @@ t("PAD HERE - .", "68 ")
 # ---------------------------------------------------------------- errors
 
 err("DROP", "DROP? MSG # 1 ", "an empty stack")
-err(". ", "0 .? MSG # 1 ")
+e = copy.deepcopy(BOOTED)                   # what . prints here is whatever the free cell holds
+check(". on an empty stack", say(e, ".").split(" ", 1)[1], ".? MSG # 1 \r\n")
 err("IF", "IF? MSG # 17 ", "compilation only")
 err([": T : ;"], ":? MSG # 18 ", "execution only")
 err([": T 1 IF ;"], ";? MSG # 20 ", "a definition not finished")
@@ -273,7 +277,7 @@ err([": T THEN ;"], "THEN? MSG # 19 ", "conditionals not paired")
 err([": T BEGIN LOOP ;"], "LOOP? MSG # 19 ")
 t([": T 1", "2 + . ;", "T"], "3 ", "a definition over two lines")
 t([": T FOO", "1 2 + ."], "3 ", "an error leaves the compiler")
-err("-->", "-->? MSG # 0 ", "no disc words")
+err("-->", "-->? MSG # 22 ", "--> is for a screen that is being loaded")
 err("' NOPE", "NOPE? MSG # 0 ")
 err(["-1 WARNING !", "FOO"], "\r\nfig-FORTH RISC-V", "WARNING below 0: an error aborts")
 
@@ -294,11 +298,122 @@ t(["VOCABULARY V IMMEDIATE", "VOC-LINK @ ' V 12 + = . ' V 12 + @ %d = ." % (RAM 
 
 e = copy.deepcopy(BOOTED)
 out = say(e, "VLIST")
-check("VLIST starts with the newest word", out.split()[:3], ["VLIST", "?", "."])
+check("VLIST starts with the newest word", out.split()[:3], ["VLIST", "TRIAD", "INDEX"])
 check("VLIST ends with the oldest", out.split()[-3:], ["EXECUTE", "LIT", "OK"])
 check("VLIST shows every word", len(out.split()), len(WORDS) + 1)  # and OK
 check("VLIST keeps to the line", max(len(l) for l in out.split("\r\n")) < 80, True)
 check("a key stops VLIST", len(keys(e, b"VLIST\rX").split()) < 12, True)
+
+# ---------------------------------------------------------------- the disc
+
+LO, HI, B_BUF = 0x4000, 0xF800, 256
+
+def screen(e, n, lines):
+    """Put a screen on the disc: 16 lines of 64 characters."""
+    text = b"".join(l.encode().ljust(64) for l in lines).ljust(1024)
+    assert len(text) == 1024
+    e.f[LO + 1024 * n:LO + 1024 * (n + 1)] = text
+
+def disc(*screens):
+    """A machine with these (number, lines) screens on its disc."""
+    e = copy.deepcopy(BOOTED)
+    for n, lines in screens:
+        screen(e, n, lines)
+    return e
+
+def block(e, n):
+    return bytes(e.f[LO + B_BUF * n:LO + B_BUF * (n + 1)])
+
+def ask(e, line, want, what=None, ok="OK"):
+    check(what or line, say(e, line), want + ok + "\r\n")
+
+# FLUSH is in the model's editor screens; typed here as it is there
+FLUSH = ": FLUSH [ LIMIT FIRST - B/BUF 8 + / ] LITERAL 0 DO 32767 BUFFER DROP LOOP ;"
+
+check("the disc starts above the kernel", len(IMAGE) <= LO, True)
+t("B/BUF . B/SCR . LIMIT FIRST - B/BUF 8 + / . LO . HI .", "256 4 3 16384 63488 ")
+t("USE @ FIRST = . PREV @ FIRST = . OFFSET @ .", "1 1 0 ")
+
+e = copy.deepcopy(BOOTED)
+e.f[LO + 256] = 65
+ask(e, "1 BLOCK C@ . 1 BLOCK 255 + C@ .", "65 255 ", "BLOCK reads the flash")
+before = bytes(e.f)
+ask(e, "66 1 BLOCK C! UPDATE", "")
+ask(e, "2 BLOCK DROP 1 BLOCK C@ .", "66 ", "a changed block stays in its buffer")
+check("and is not on the disc yet", bytes(e.f), before)
+ask(e, "2 BLOCK DROP 3 BLOCK DROP 4 BLOCK DROP 5 BLOCK DROP", "")
+check("until its buffer is wanted: then it is written", block(e, 1), b"B" + b"\xff" * 255)
+check("and nothing else is", bytes(e.f[:LO + 256]) + bytes(e.f[LO + 512:]),
+      before[:LO + 256] + before[LO + 512:])
+ask(e, "1 BLOCK C@ .", "66 ", "and read again")
+
+e = copy.deepcopy(BOOTED)
+say(e, FLUSH)
+ask(e, "1 BLOCK B/BUF BLANKS 67 1 BLOCK C! UPDATE", "")
+ask(e, "183 BLOCK B/BUF 68 FILL UPDATE FLUSH", "")
+check("FLUSH writes the changed buffers", (block(e, 1), block(e, 183)),
+      (b"C" + b" " * 255, b"D" * 256))
+check("the kernel is as it was", bytes(e.f[:len(IMAGE)]), IMAGE)
+flash = bytes(e.f)
+e = Emu(IMAGE, b"")                         # power off and on: the RAM is gone
+e.f[:] = flash
+e.ram[:] = b"\xa5" * len(e.ram)
+run_to_idle(e)
+ask(e, "1 BLOCK C@ . 183 BLOCK C@ .", "67 68 ", "the disc keeps it without power")
+ask(e, "2 BLOCK DROP 3 BLOCK DROP 4 BLOCK DROP 5 BLOCK DROP 6 BLOCK DROP", "")
+check("a cold start empties the buffers: nothing is written from them", bytes(e.f), flash)
+
+err("184 BLOCK", "BLOCK? MSG # 6 ", "past the end of the disc")
+err("-1 BLOCK", "BLOCK? MSG # 6 ", "before its start is the kernel")
+e = copy.deepcopy(BOOTED)
+before = bytes(e.f)
+ask(e, "FIRST 4 + 0 BLOCK-WRITE . FIRST 4 + LO 1+ BLOCK-WRITE .", "1 1 ",
+    "BLOCK-WRITE refuses what is not a block of the disc")
+ask(e, "FIRST 4 + HI BLOCK-WRITE . FIRST 4 + LO B/BUF - BLOCK-WRITE .", "1 1 ")
+ask(e, "FIRST 5 + LO BLOCK-WRITE .", "1 ", "and a source that is off the cell")
+check("and writes nothing", bytes(e.f), before)
+ask(e, "FIRST 4 + LO BLOCK-WRITE .", "0 ")
+for first in ["", "2 BLOCK DROP", "2 BLOCK DROP 3 BLOCK DROP", "2 BLOCK DROP 3 BLOCK DROP 4 BLOCK DROP"]:
+    e = copy.deepcopy(BOOTED)
+    say(e, FLUSH)
+    say(e, first)
+    say(e, "69 9 BLOCK C! UPDATE FLUSH")
+    check("FLUSH after: " + first, block(e, 9)[0], 69)
+e = copy.deepcopy(BOOTED)
+e.flash_stuck = {LO + 256: 0}               # a worn-out byte
+say(e, FLUSH)
+ask(e, "67 1 BLOCK C! UPDATE FLUSH", "FLUSH? MSG # 8 ", "the flash did not take the block", ok="")
+
+SQ = [": SQ DUP * ;", "7 SQ .", "", "( THE LAST LINE OF THE FIRST BLOCK ) 1 .", "2 .", "", "", "",
+      "", "", "", "", "", "", "", "3 ."]
+e = disc((1, SQ))
+ask(e, "1 LOAD", "49 1 2 3 ", "LOAD goes through the four blocks of a screen")
+ask(e, "BLK @ . 9 SQ .", "0 81 ", "and comes back to the terminal")
+e = disc((1, ["1 .", "-->"] + [""] * 13 + ["99 ."]), (2, ["2 ."]))
+ask(e, "1 LOAD", "1 2 ", "--> goes on with the next screen")
+e = disc((1, [": A 3 LOAD ; A 5 ."]), (3, ["4 ."]))
+ask(e, "1 LOAD", "4 5 ", "a screen may load another")
+e = disc((3, ["1 .", " FOO"]))
+ask(e, "3 LOAD", "1 FOO? MSG # 0 ", "an error on a screen", ok="")
+ask(e, ". . BLK @ .", "12 69 0 ", "leaves where it was: BLK and IN")
+
+e = disc((1, SQ))
+want = "\r\nSCR # 1 " + "".join("\r\n%3d %s" % (i, l) for i, l in enumerate(SQ)) + "\r\n"
+ask(e, "1 LIST", want)
+ask(e, "SCR @ .", "1 ")
+ask(e, "1 1 .LINE", "7 SQ .")
+e = disc((1, ["( ONE )"]), (2, ["( TWO )"]), (3, ["( THREE )"]))
+ask(e, "1 3 INDEX", "\x0c\r\n\r\n  1 ( ONE )\r\n  2 ( TWO )\r\n  3 ( THREE )")
+out = say(e, "4 TRIAD")
+check("TRIAD lists the three screens of the page", [l for l in out.split("\r\n") if "SCR #" in l],
+      ["SCR # 3 ", "SCR # 4 ", "SCR # 5 "])
+check("and ends with message 15", out.endswith("\r\nMSG # 15 \r\nOK\r\n"), True)
+
+e = disc((4, ["( ERROR MESSAGES )", "EMPTY STACK", "DICTIONARY FULL", "", "ISN'T UNIQUE"]))
+ask(e, "1 WARNING !", "")
+ask(e, "DROP", "DROP? EMPTY STACK", "with WARNING 1 a message is a line of screen 4", ok="")
+ask(e, ": DUP ;", "DUP ISN'T UNIQUE ")
+ask(e, "FOO", "FOO? ", "message 0 is nothing", ok="")
 
 # ---------------------------------------------------------------- cold and warm
 

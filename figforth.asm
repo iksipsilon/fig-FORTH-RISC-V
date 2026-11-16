@@ -76,7 +76,19 @@ include board.asm
 S0_INIT  = RAM_BASE + RAM_SIZE - 8 * CELL   # data stack, 56 cells
 R0_INIT  = S0_INIT - 64 * CELL          # return stack, 64 cells
 MSP_INIT = R0_INIT - 64 * CELL          # machine stack, 24 cells
-TIB_INIT = MSP_INIT - 24 * CELL - 96    # terminal input buffer, 96 bytes
+
+# The disc buffers: FIRST and LIMIT. A buffer is a cell that holds the block
+# number (and, in its top bit, that the block was changed), the block, and a
+# cell of nulls, which is the null word that ends the text of a block.
+B_BUF      = DISC_BLK                   # bytes in a block
+NBUF       = 3                          # buffers. The model wants 2 or more, but
+                                        # with 2 its FLUSH can pass one by: USE
+                                        # steps over PREV, and lands on itself.
+BUF_SIZE   = B_BUF + 2 * CELL
+LIMIT_INIT = MSP_INIT - 24 * CELL
+FIRST_INIT = LIMIT_INIT - NBUF * BUF_SIZE
+
+TIB_INIT = FIRST_INIT - 96              # terminal input buffer, 96 bytes
 UP_INIT  = TIB_INIT - 128               # user area, 32 cells
 
 # RAM, from the bottom up: the body of the FORTH vocabulary (the kernel is in
@@ -101,6 +113,7 @@ boot:
     li sp, MSP_INIT
     call trap_init
     call serial_init
+    call disc_init
     j cold
 
 
@@ -1030,9 +1043,11 @@ cold:
     sw a2, CELL(a1)             # the newest word
     sw zero, 2*CELL(a1)         # no vocabulary before this one
     li a3, 11*CELL              # all eleven cells of boot_up, VOC-LINK included
+    li IP, coldt                # then empty the disc buffers, then ABORT
     j cold1
 warm:                           # eight, up to WARNING: FENCE, DP and VOC-LINK
     li a3, 8*CELL               # stay
+    li IP, abort + CELL         # then ABORT
 cold1:
     li a1, boot_up
     lw UP, 2*CELL(a1)           # the initial user area
@@ -1044,8 +1059,8 @@ cold2:
     addi a2, a2, CELL
     addi a3, a3, -CELL
     bnez a3, cold2
-    li IP, abort + CELL         # ABORT is the first word to run,
-    j rpsto1                    # after RP!
+    lw DSP, U_S0(UP)            # SP!
+    j rpsto1                    # RP! and into the thread
 
 
 # ------------------------------------------------------------------------

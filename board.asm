@@ -7,11 +7,14 @@
 #   - put whatever the chip needs at address 0 and make reset reach `boot`
 #   - define RAM_BASE and RAM_SIZE
 #   - implement serial_init, serial_putc, serial_getc, serial_poll and trap_init
-# The routines are leaves: they use t0-t2 and a0 only, and no stack.
+#   - define DISC_LO, DISC_HI and DISC_BLK and implement disc_init and
+#     disc_write: the disc
+# The routines are leaves, and use no stack. The serial ones use t0-t2 and a0
+# only; disc_write says what it uses.
 #
 # The register addresses, the order of the writes and the reasons given for
-# them come from the sixforths kernel (src/mcu.s, src/03-traps.s), where they
-# were checked on this board. The section numbers are those of the CH32V00x
+# them come from the sixforths kernel (src/mcu.s, src/03-traps.s,
+# src/11-flash.s), where they were checked on this board. The section numbers are those of the CH32V00x
 # reference manual V1.5.
 
 # The vector table (QingKe V2 processor manual, chapter 3): with mtvec = 3 the
@@ -43,6 +46,28 @@ RCC_USART1EN = 1 << 14
 # Flash controller, chapter 18
 FLASH_R_BASE = 0x40022000
 FLASH_ACTLR  = 0x00             # 18.3.1 LATENCY[1:0], the wait states
+FLASH_KEYR     = 0x04           # unlocks the control register: KEY1, then KEY2
+FLASH_STATR    = 0x0C           # status: BSY in bit 0
+FLASH_CTLR     = 0x10           # control
+FLASH_ADDR     = 0x14           # the page to erase or program
+FLASH_MODEKEYR = 0x24           # unlocks the fast (page) modes: KEY1, then KEY2
+FLASH_KEY1 = 0x45670123
+FLASH_KEY2 = 0xCDEF89AB
+FLASH_STRT    = 1 << 6          # CTLR: start the erase or the programming
+FLASH_FTPG    = 1 << 16         # CTLR: fast page programming mode
+FLASH_FTER    = 1 << 17         # CTLR: fast page erase mode
+FLASH_BUFLOAD = 1 << 18         # CTLR: take the latched word into the page buffer
+FLASH_BUFRST  = 1 << 19         # CTLR: clear the page buffer
+FLASH_BSY     = 1 << 0          # STATR: busy
+FLASH_MAP = 0x08000000          # where the controller sees the flash; it is
+                                # also at 0, where the program runs and reads
+
+# The disc is the flash from DISC_LO up to DISC_HI. A block is one page of
+# the flash: the chip erases and programs 256 bytes at a time, nothing less.
+# The kernel is below DISC_LO.
+DISC_LO  = 0x4000
+DISC_HI  = 0xF800               # the end of the flash, 62 KiB
+DISC_BLK = 256
 
 # Port D, chapter 7
 GPIOD_BASE  = 0x40011400
@@ -141,6 +166,99 @@ serial_poll:
     lbu a0, USART_DATAR(t0)     # take it: reading the data register clears RXNE
     li a0, 1
 serial_poll1:
+    ret
+
+# Unlock the flash controller, for programming and for the page modes. It
+# stays unlocked.
+disc_init:
+    li t0, FLASH_R_BASE
+    li t1, FLASH_KEY1
+    li t2, FLASH_KEY2
+    sw t1, FLASH_KEYR(t0)
+    sw t2, FLASH_KEYR(t0)
+    sw t1, FLASH_MODEKEYR(t0)
+    sw t2, FLASH_MODEKEYR(t0)
+    ret
+
+# Write one block of the disc: erase its page, program it (18.4.5: FTPG,
+# BUFRST, 64 times a word and BUFLOAD, the address, STRT), and read it back.
+# The core stands still while the controller is busy, about 3 ms each time.
+#   a0 = the address of the block: DISC_LO ... DISC_HI - DISC_BLK, a multiple
+#        of DISC_BLK
+#   a2 = the 256 bytes, in RAM, on a cell boundary
+# Returns a0 = 0 if the flash now holds them, 1 if not. Nothing is written if
+# a0 or a2 is not as above: the kernel cannot be reached from here.
+# Uses t0-t2 and a2-a5.
+disc_write:
+    li t0, DISC_LO
+    bltu a0, t0, disc_write9
+    li t0, DISC_HI
+    bgeu a0, t0, disc_write9
+    andi t0, a0, DISC_BLK - 1
+    bnez t0, disc_write9
+    andi t0, a2, 3
+    bnez t0, disc_write9
+    li t0, FLASH_R_BASE
+    li a5, FLASH_MAP
+    add a5, a5, a0              # a5 = the page, as the controller sees it
+disc_write1:
+    lw t1, FLASH_STATR(t0)
+    andi t1, t1, FLASH_BSY
+    bnez t1, disc_write1
+    li t1, FLASH_FTER           # erase the page
+    sw t1, FLASH_CTLR(t0)
+    sw a5, FLASH_ADDR(t0)
+    li t1, FLASH_FTER | FLASH_STRT
+    sw t1, FLASH_CTLR(t0)
+disc_write2:
+    lw t1, FLASH_STATR(t0)
+    andi t1, t1, FLASH_BSY
+    bnez t1, disc_write2
+    li t1, FLASH_FTPG           # program it: first clear the page buffer
+    sw t1, FLASH_CTLR(t0)
+    li t1, FLASH_FTPG | FLASH_BUFRST
+    sw t1, FLASH_CTLR(t0)
+disc_write3:
+    lw t1, FLASH_STATR(t0)
+    andi t1, t1, FLASH_BSY
+    bnez t1, disc_write3
+    mv a3, a5                   # a3 = where the next word goes
+    li a4, DISC_BLK // 4        # a4 = words still to load
+disc_write4:
+    lw t2, 0(a2)
+    sw t2, 0(a3)                # latch the word at its address in the flash
+    li t1, FLASH_FTPG | FLASH_BUFLOAD
+    sw t1, FLASH_CTLR(t0)       # and take it into the page buffer
+disc_write5:
+    lw t1, FLASH_STATR(t0)
+    andi t1, t1, FLASH_BSY
+    bnez t1, disc_write5
+    addi a2, a2, 4
+    addi a3, a3, 4
+    addi a4, a4, -1
+    bnez a4, disc_write4
+    sw a5, FLASH_ADDR(t0)
+    li t1, FLASH_FTPG | FLASH_STRT
+    sw t1, FLASH_CTLR(t0)       # program the page from the buffer
+disc_write6:
+    lw t1, FLASH_STATR(t0)
+    andi t1, t1, FLASH_BSY
+    bnez t1, disc_write6
+    sw zero, FLASH_CTLR(t0)     # the page modes off
+    addi a2, a2, -DISC_BLK      # read it back
+    li a4, DISC_BLK // 4
+disc_write7:
+    lw t1, 0(a0)
+    lw t2, 0(a2)
+    bne t1, t2, disc_write9
+    addi a0, a0, 4
+    addi a2, a2, 4
+    addi a4, a4, -1
+    bnez a4, disc_write7
+    li a0, 0
+    ret
+disc_write9:
+    li a0, 1
     ret
 
 # Interrupts off, and every exception to `trap` through the vector table.

@@ -22,8 +22,7 @@
 #   flash        the kernel cannot be written, so nothing in it may change.
 #                The body of the FORTH vocabulary is in RAM (FORTH_VOC).
 #
-# The disc is not here yet: BLOCK BUFFER LOAD LIST and their company, and the
-# disc half of WORD, QUIT, ERROR, MESSAGE and the null word. BLK stays 0.
+# The disc is the flash above the kernel; see THE DISC below.
 #
 # A word is its header (python3 tools/header.py NAME label previous docol),
 # then the thread. `last_nfa:` stands on the name field of the newest word:
@@ -201,6 +200,50 @@ csll:
     dw docon
     dw 64
 
+# FIRST  ( -- addr )  the first disc buffer
+align 4
+n_first:
+    db 0x85
+    string FIRST
+    bytes 0x20 0xA0
+    dw n_csll
+first:
+    dw docon
+    dw FIRST_INIT
+
+# LIMIT  ( -- addr )  the end of the last disc buffer
+align 4
+n_limit:
+    db 0x85
+    string LIMIT
+    bytes 0x20 0xA0
+    dw n_first
+limit:
+    dw docon
+    dw LIMIT_INIT
+
+# B/BUF  ( -- 256 )  bytes in a block: one page of the flash. The model's disc has 128.
+align 4
+n_bbuf:
+    db 0x85
+    string B/BUF
+    bytes 0x20 0xA0
+    dw n_limit
+bbuf:
+    dw docon
+    dw B_BUF
+
+# B/SCR  ( -- 4 )  blocks in a screen
+align 4
+n_bscr:
+    db 0x85
+    string B/SCR
+    bytes 0x20 0xA0
+    dw n_bbuf
+bscr:
+    dw docon
+    dw 1024 // B_BUF
+
 # +ORIGIN  ( n -- addr )  the address n bytes into the origin table (SCR 12 of the nucleus)
 #   : +ORIGIN  origin + ;
 align 4
@@ -208,7 +251,7 @@ n_porig:
     db 0x87
     string +ORIGI
     db 0xCE                 # N + 0x80
-    dw n_csll
+    dw n_bscr
 porig:
     dw docol
     dw lit
@@ -1344,9 +1387,13 @@ query:
     dw store
     dw semis
 
-# null  ( -- )  the word whose name is a null: the end of the line. It leaves
-#        INTERPRET. The model's disc half (the next block) is not here.
-#   : null  R> DROP ;  IMMEDIATE
+# null  ( -- )  the word whose name is a null: the end of the line, or of a block.
+#        From the terminal it leaves INTERPRET. From the disc it goes on with
+#        the next block, and leaves at the end of the screen: 3 is B/SCR - 1,
+#        where the model has 7.
+#   : null  BLK @ IF 1 BLK +! 0 IN ! BLK @ 3 AND 0=
+#           IF ?EXEC R> DROP ENDIF
+#           ELSE R> DROP ENDIF ;  IMMEDIATE
 align 4
 n_null:
     db 0xC1
@@ -1354,8 +1401,33 @@ n_null:
     dw n_query
 null:
     dw docol
+    dw blk
+    dw at
+    dw zbran
+    dw %offset(null1)
+    dw one
+    dw blk
+    dw pstor
+    dw zero
+    dw inn
+    dw store
+    dw blk
+    dw at
+    dw three
+    dw andd
+    dw zequ
+    dw zbran
+    dw %offset(null2)
+    dw qexec
     dw fromr
     dw drop
+null2:
+    dw bran
+    dw %offset(null3)
+null1:
+    dw fromr
+    dw drop
+null3:
     dw semis
 
 
@@ -1448,8 +1520,10 @@ pad:
     dw semis
 
 # WORD  ( c -- )  move the next word of the input, c its delimiter, to HERE: a
-#        length byte, the text, blanks. The model's disc half is not here.
-#   : WORD  TIB @ IN @ + SWAP ENCLOSE HERE 34 BLANKS IN +!
+#        length byte, the text, blanks. The input is the block BLK, or the
+#        terminal if BLK is 0.
+#   : WORD  BLK @ IF BLK @ BLOCK ELSE TIB @ ENDIF
+#           IN @ + SWAP ENCLOSE HERE 34 BLANKS IN +!
 #           OVER - >R R HERE C! + HERE 1+ R> CMOVE ;
 align 4
 n_wordd:
@@ -1459,8 +1533,19 @@ n_wordd:
     dw n_pad
 wordd:
     dw docol
+    dw blk
+    dw at
+    dw zbran
+    dw %offset(wordd1)
+    dw blk
+    dw at
+    dw block
+    dw bran
+    dw %offset(wordd2)
+wordd1:
     dw tib
     dw at
+wordd2:
     dw inn
     dw at
     dw plus
@@ -2088,7 +2173,7 @@ quit2:
     dw semis
 
 # ABORT  ( -- )  empty the stacks, say who we are, go to QUIT
-#   : ABORT  SP! DECIMAL CR ." fig-FORTH RISC-V"
+#   : ABORT  SP! DECIMAL DR0 CR ." fig-FORTH RISC-V"
 #            [COMPILE] FORTH DEFINITIONS QUIT ;
 align 4
 n_abort:
@@ -2100,6 +2185,7 @@ abort:
     dw docol
     dw spsto
     dw decim
+    dw drzer
     dw cr
     dw pdotq
     db 16
@@ -2119,6 +2205,22 @@ n_coldw:
     dw n_abort
 coldw:
     dw cold
+
+# What a cold start runs, after its code: EMPTY-BUFFERS FIRST USE ! FIRST PREV !
+# ABORT. In the model USE and PREV are variables that hold FIRST when the
+# system is built, and the manual has you type EMPTY-BUFFERS before the disc
+# is first used. Here it is done at once: a buffer that seemed to be changed
+# would be written to the flash.
+align 4
+coldt:
+    dw mtbuf
+    dw first
+    dw use
+    dw store
+    dw first
+    dw prev
+    dw store
+    dw abort
 
 
 # ------------------------------------------------------------------------
@@ -2389,26 +2491,481 @@ msmod:
 
 
 # ------------------------------------------------------------------------
-# MESSAGE
+# THE DISC: BUFFERS
 #
-# The model types line n of the message screens when WARNING is 1. There is
-# no disc, so this is its other half only.
+# The disc is the flash from LO to HI, 46 KiB: blocks 0 to 183, screens 0 to
+# 45. A block is 256 bytes, one page of the flash, and a screen is 4 blocks.
+#
+# A buffer is the block number in a cell (its top bit says the block was
+# changed and is to be written), the block, and a cell of nulls. So the 2
+# of the model is 4 here, its 8000 is 80000000, and a buffer is B/BUF + 8.
+#
+# USE and PREV are variables in the model, with their values in the
+# dictionary. The kernel is in flash, so here they are user variables.
 
-# MESSAGE  ( n -- )
-#   : MESSAGE  ." MSG # " . ;
+# USE  ( -- addr )  the buffer to use next, the stalest
+align 4
+n_use:
+    db 0x83
+    string US
+    db 0xC5                 # E + 0x80
+    dw n_msmod
+use:
+    dw douse
+    dw 0x64
+
+# PREV  ( -- addr )  the buffer used last
+align 4
+n_prev:
+    db 0x84
+    string PREV
+    bytes 0x20 0x20 0xA0
+    dw n_use
+prev:
+    dw douse
+    dw 0x68
+
+# +BUF  ( addr1 -- addr2 f )  the next buffer; f is false if it is PREV
+#   : +BUF  BUF_SIZE + DUP LIMIT = IF DROP FIRST ENDIF
+#           DUP PREV @ - ;
+align 4
+n_pbuf:
+    db 0x84
+    string +BUF
+    bytes 0x20 0x20 0xA0
+    dw n_prev
+pbuf:
+    dw docol
+    dw lit
+    dw BUF_SIZE
+    dw plus
+    dw dup
+    dw limit
+    dw equal
+    dw zbran
+    dw %offset(pbuf1)
+    dw drop
+    dw first
+pbuf1:
+    dw dup
+    dw prev
+    dw at
+    dw subb
+    dw semis
+
+# UPDATE  ( -- )  mark the buffer used last as changed
+#   : UPDATE  PREV @ @ 0x80000000 OR PREV @ ! ;
+align 4
+n_updat:
+    db 0x86
+    string UPDATE
+    bytes 0xA0
+    dw n_pbuf
+updat:
+    dw docol
+    dw prev
+    dw at
+    dw at
+    dw lit
+    dw 0x80000000
+    dw orr
+    dw prev
+    dw at
+    dw store
+    dw semis
+
+# EMPTY-BUFFERS  ( -- )  clear the buffers; nothing is written
+#   : EMPTY-BUFFERS  FIRST LIMIT OVER - ERASE ;
+align 4
+n_mtbuf:
+    db 0x8D
+    string EMPTY-BUFFERS
+    bytes 0x20 0xA0
+    dw n_updat
+mtbuf:
+    dw docol
+    dw first
+    dw limit
+    dw over
+    dw subb
+    dw erase
+    dw semis
+
+# DR0  ( -- )  drive 0. There is one drive: no DR1.
+#   : DR0  0 OFFSET ! ;
+align 4
+n_drzer:
+    db 0x83
+    string DR
+    db 0xB0                 # 0 + 0x80
+    dw n_mtbuf
+drzer:
+    dw docol
+    dw zero
+    dw ofset
+    dw store
+    dw semis
+
+# BUFFER  ( n -- addr )  give block n the stalest buffer, which is first written
+#        to the disc if it was changed; the block is not read
+#   : BUFFER  USE @ DUP >R
+#             BEGIN +BUF UNTIL USE !
+#             R @ 0< IF R 4 + R @ 0x7FFFFFFF AND 0 R/W ENDIF
+#             R ! R PREV ! R> 4 + ;
+align 4
+n_buffe:
+    db 0x86
+    string BUFFER
+    bytes 0xA0
+    dw n_drzer
+buffe:
+    dw docol
+    dw use
+    dw at
+    dw dup
+    dw tor
+buffe1:
+    dw pbuf
+    dw zbran
+    dw %offset(buffe1)
+    dw use
+    dw store
+    dw rr
+    dw at
+    dw zless
+    dw zbran
+    dw %offset(buffe2)
+    dw rr
+    dw lit
+    dw 4
+    dw plus
+    dw rr
+    dw at
+    dw lit
+    dw 0x7FFFFFFF
+    dw andd
+    dw zero
+    dw rslw
+buffe2:
+    dw rr
+    dw store
+    dw rr
+    dw prev
+    dw store
+    dw fromr
+    dw lit
+    dw 4
+    dw plus
+    dw semis
+
+# BLOCK  ( n -- addr )  the address of block n in a buffer, read from the disc if
+#        no buffer holds it
+#   : BLOCK  OFFSET @ + >R
+#            PREV @ DUP @ R - DUP +
+#            IF BEGIN +BUF 0=
+#            IF DROP R BUFFER DUP R 1 R/W 4 - ENDIF
+#            DUP @ R - DUP + 0= UNTIL
+#            DUP PREV ! ENDIF
+#            R> DROP 4 + ;
+align 4
+n_block:
+    db 0x85
+    string BLOCK
+    bytes 0x20 0xA0
+    dw n_buffe
+block:
+    dw docol
+    dw ofset
+    dw at
+    dw plus
+    dw tor
+    dw prev
+    dw at
+    dw dup
+    dw at
+    dw rr
+    dw subb
+    dw dup
+    dw plus
+    dw zbran
+    dw %offset(block1)
+block2:
+    dw pbuf
+    dw zequ
+    dw zbran
+    dw %offset(block3)
+    dw drop
+    dw rr
+    dw buffe
+    dw dup
+    dw rr
+    dw one
+    dw rslw
+    dw lit
+    dw 4
+    dw subb
+block3:
+    dw dup
+    dw at
+    dw rr
+    dw subb
+    dw dup
+    dw plus
+    dw zequ
+    dw zbran
+    dw %offset(block2)
+    dw dup
+    dw prev
+    dw store
+block1:
+    dw fromr
+    dw drop
+    dw lit
+    dw 4
+    dw plus
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# THE DISC: LINES, MESSAGE, LOAD
+#
+# MESSAGE types line n of screen 4 if WARNING is 1, as in the model. The
+# messages are not on the disc until someone puts them there.
+
+# (LINE)  ( line scr -- addr 64 )  a line of a screen, in its buffer
+#   : (LINE)  >R C/L B/BUF */MOD R> B/SCR * +
+#             BLOCK + C/L ;
+align 4
+n_pline:
+    db 0x86
+    string (LINE)
+    bytes 0xA0
+    dw n_block
+pline:
+    dw docol
+    dw tor
+    dw csll
+    dw bbuf
+    dw ssmod
+    dw fromr
+    dw bscr
+    dw star
+    dw plus
+    dw block
+    dw plus
+    dw csll
+    dw semis
+
+# .LINE  ( line scr -- )  type it
+#   : .LINE  (LINE) -TRAILING TYPE ;
+align 4
+n_dline:
+    db 0x85
+    string .LINE
+    bytes 0x20 0xA0
+    dw n_pline
+dline:
+    dw docol
+    dw pline
+    dw dtrai
+    dw typee
+    dw semis
+
+# MESSAGE  ( n -- )  type message n: a line of the disc, or its number
+#   : MESSAGE  WARNING @ IF
+#              -DUP IF 4 OFFSET @ B/SCR / - .LINE ENDIF
+#              ELSE ." MSG # " . ENDIF ;
 align 4
 n_mess:
     db 0x87
     string MESSAG
     db 0xC5                 # E + 0x80
-    dw n_msmod
+    dw n_dline
 mess:
     dw docol
+    dw warn
+    dw at
+    dw zbran
+    dw %offset(mess1)
+    dw ddup
+    dw zbran
+    dw %offset(mess2)
+    dw lit
+    dw 4
+    dw ofset
+    dw at
+    dw bscr
+    dw slash
+    dw subb
+    dw dline
+mess2:
+    dw bran
+    dw %offset(mess3)
+mess1:
     dw pdotq
     db 6
     bytes 0x4D 0x53 0x47 0x20 0x23 0x20    # MSG #
 align 4
     dw dot
+mess3:
+    dw semis
+
+# LOAD  ( scr -- )  interpret a screen
+#   : LOAD  BLK @ >R IN @ >R 0 IN ! B/SCR * BLK !
+#           INTERPRET R> IN ! R> BLK ! ;
+align 4
+n_load:
+    db 0x84
+    string LOAD
+    bytes 0x20 0x20 0xA0
+    dw n_mess
+load:
+    dw docol
+    dw blk
+    dw at
+    dw tor
+    dw inn
+    dw at
+    dw tor
+    dw zero
+    dw inn
+    dw store
+    dw bscr
+    dw star
+    dw blk
+    dw store
+    dw inter
+    dw fromr
+    dw inn
+    dw store
+    dw fromr
+    dw blk
+    dw store
+    dw semis
+
+# -->  ( -- )  go on with the next screen
+#   : -->  ?LOADING 0 IN ! B/SCR BLK @ OVER MOD - BLK +! ;  IMMEDIATE
+align 4
+n_arrow:
+    db 0xC3
+    string --
+    db 0xBE                 # > + 0x80
+    dw n_load
+arrow:
+    dw docol
+    dw qload
+    dw zero
+    dw inn
+    dw store
+    dw bscr
+    dw blk
+    dw at
+    dw over
+    dw modd
+    dw subb
+    dw blk
+    dw pstor
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# THE DISC: R/W
+#
+# The installation dependent part. The model's R/W drives a disc controller;
+# its manual also gives one that keeps the blocks in memory, between LO and
+# HI, for a system that has no disc:
+#
+#   : R/W  >R B/BUF * LO + DUP HI > 6 ?ERROR  R> IF SWAP ENDIF  B/BUF CMOVE ;
+#
+# This is that one. The flash is memory to read, so reading is its CMOVE.
+# Writing is BLOCK-WRITE, a CODE word: the board erases and programs the
+# page and reads it back. The range check is for both ends, since below LO
+# is the kernel.
+
+# LO  ( -- addr )  the start of the disc
+align 4
+n_dlo:
+    db 0x82
+    string LO
+    bytes 0xA0
+    dw n_arrow
+dlo:
+    dw docon
+    dw DISC_LO
+
+# HI  ( -- addr )  its end
+align 4
+n_dhi:
+    db 0x82
+    string HI
+    bytes 0xA0
+    dw n_dlo
+dhi:
+    dw docon
+    dw DISC_HI
+
+# BLOCK-WRITE  ( from to -- f )  write the 256 bytes at from (RAM, on a cell boundary)
+#        to the block of the disc at to. f is true if the flash does not
+#        hold them afterwards.
+align 4
+n_blkwr:
+    db 0x8B
+    string BLOCK-WRIT
+    db 0xC5                 # E + 0x80
+    dw n_dhi
+blkwr:
+    dw blkwr + CELL
+    lw a0, 0(DSP)
+    lw a2, CELL(DSP)
+    addi DSP, DSP, CELL
+    jal ra, disc_write          # not `call`: bronzebeard gets that wrong beyond 2 KiB
+    mv a1, a0
+    j put
+
+# R/W  ( addr blk f -- )  read (f = 1) or write (f = 0) block blk at addr.
+#        Error 6 is DISC RANGE, error 8 DISC ERROR.
+#   : R/W  >R B/BUF * LO + DUP LO < OVER HI B/BUF - > OR 6 ?ERROR
+#          R> IF SWAP B/BUF CMOVE
+#          ELSE BLOCK-WRITE 8 ?ERROR ENDIF ;
+align 4
+n_rslw:
+    db 0x83
+    string R/
+    db 0xD7                 # W + 0x80
+    dw n_blkwr
+rslw:
+    dw docol
+    dw tor
+    dw bbuf
+    dw star
+    dw dlo
+    dw plus
+    dw dup
+    dw dlo
+    dw less
+    dw over
+    dw dhi
+    dw bbuf
+    dw subb
+    dw great
+    dw orr
+    dw lit
+    dw 6
+    dw qerr
+    dw fromr
+    dw zbran
+    dw %offset(rslw1)
+    dw swap
+    dw bbuf
+    dw cmove
+    dw bran
+    dw %offset(rslw2)
+rslw1:
+    dw blkwr
+    dw lit
+    dw 8
+    dw qerr
+rslw2:
     dw semis
 
 
@@ -2422,7 +2979,7 @@ align 4
 n_tick:
     db 0xC1
     bytes 0x27 0x20 0xA0    # '
-    dw n_mess
+    dw n_rslw
 tick:
     dw docol
     dw dfind
@@ -2931,6 +3488,127 @@ ques:
 
 
 # ------------------------------------------------------------------------
+# LIST, INDEX, TRIAD
+
+# LIST  ( scr -- )  type a screen
+#   : LIST  DECIMAL CR DUP SCR !
+#           ." SCR # " . 16 0 DO CR I 3 .R SPACE
+#           I SCR @ .LINE LOOP CR ;
+align 4
+n_listt:
+    db 0x84
+    string LIST
+    bytes 0x20 0x20 0xA0
+    dw n_ques
+listt:
+    dw docol
+    dw decim
+    dw cr
+    dw dup
+    dw scr
+    dw store
+    dw pdotq
+    db 6
+    bytes 0x53 0x43 0x52 0x20 0x23 0x20    # SCR #
+align 4
+    dw dot
+    dw lit
+    dw 16
+    dw zero
+    dw xdo
+listt1:
+    dw cr
+    dw ido
+    dw three
+    dw dotr
+    dw space
+    dw ido
+    dw scr
+    dw at
+    dw dline
+    dw xloop
+    dw %offset(listt1)
+    dw cr
+    dw semis
+
+# INDEX  ( from to -- )  type the first line of each screen
+#   : INDEX  12 EMIT CR 1+ SWAP
+#            DO CR I 3 .R SPACE
+#            0 I .LINE
+#            ?TERMINAL IF LEAVE ENDIF LOOP ;
+align 4
+n_index:
+    db 0x85
+    string INDEX
+    bytes 0x20 0xA0
+    dw n_listt
+index:
+    dw docol
+    dw lit
+    dw 12
+    dw emit
+    dw cr
+    dw onep
+    dw swap
+    dw xdo
+index1:
+    dw cr
+    dw ido
+    dw three
+    dw dotr
+    dw space
+    dw zero
+    dw ido
+    dw dline
+    dw qterm
+    dw zbran
+    dw %offset(index2)
+    dw leave
+index2:
+    dw xloop
+    dw %offset(index1)
+    dw semis
+
+# TRIAD  ( scr -- )  type the three screens of the page that holds scr, and
+#        message 15 under them
+#   : TRIAD  12 EMIT 3 / 3 * 3 OVER + SWAP
+#            DO CR I LIST LOOP CR
+#            15 MESSAGE CR ;
+align 4
+n_triad:
+    db 0x85
+    string TRIAD
+    bytes 0x20 0xA0
+    dw n_index
+triad:
+    dw docol
+    dw lit
+    dw 12
+    dw emit
+    dw three
+    dw slash
+    dw three
+    dw star
+    dw three
+    dw over
+    dw plus
+    dw swap
+    dw xdo
+triad1:
+    dw cr
+    dw ido
+    dw listt
+    dw xloop
+    dw %offset(triad1)
+    dw cr
+    dw lit
+    dw 15
+    dw mess
+    dw cr
+    dw semis
+
+
+# ------------------------------------------------------------------------
 # VLIST
 
 # VLIST  ( -- )  type the names of the CONTEXT vocabulary; a key stops it
@@ -2944,7 +3622,7 @@ last_nfa:
     db 0x85
     string VLIST
     bytes 0x20 0xA0
-    dw n_ques
+    dw n_triad
 vlist:
     dw docol
     dw lit

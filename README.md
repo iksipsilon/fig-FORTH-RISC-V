@@ -5,29 +5,42 @@ written for the [bronzebeard](https://github.com/theandrew168/bronzebeard)
 assembler. The first target is the WCH CH32V006 (RV32EC, 62 KiB flash,
 8 KiB RAM).
 
-**What is here: the kernel without the disc.** The 46 CODE words of the model
-(the nucleus) and 149 high-level words: the text interpreter, the compiler,
-the defining words, vocabularies, number input and output, `FORGET`, `VLIST`.
-It starts, reads a line, and answers `OK`:
+**What is here: the kernel of the model.** The 46 CODE words (the nucleus) and
+172 high-level words: the text interpreter, the compiler, the defining words,
+vocabularies, number input and output, `FORGET`, `VLIST`, and the disc:
+`BLOCK` `BUFFER` `UPDATE` `LOAD` `-->` `LIST` `INDEX` `TRIAD`. It starts, reads a
+line, and answers `OK`:
 
     fig-FORTH RISC-V
     : SQ DUP * ; OK
     7 SQ . 49 OK
     FOO FOO? MSG # 0
 
-Names are in capitals, as then. An error is a number (the model's list is in
-the Installation Manual): 0 not found, 1 empty stack, 4 not unique, 17
-compilation only, 18 execution only, 19 conditionals not paired, 20
-definition not finished, 21 in protected dictionary, 24 declare vocabulary.
+Names are in capitals, as then. An error is a number (the list is in the
+Installation Manual): 0 not found, 1 empty stack, 4 not unique, 6 disc range,
+8 disc error, 17 compilation only, 18 execution only, 19 conditionals not
+paired, 20 definition not finished, 21 in protected dictionary, 24 declare
+vocabulary. After an error two numbers are on the stack, `IN` and `BLK`.
 
-New words go into RAM (about 7 KiB) and are gone at power-off.
+New words go into RAM (about 6.5 KiB) and are gone at power-off. What is
+written to the disc stays.
 
-**Not here: the disc.** `BLOCK` `BUFFER` `LOAD` `LIST` and their company, the
-editor, and the disc half of `WORD`, `QUIT`, `ERROR`, `MESSAGE` and the null
-word.
+**The disc is the flash above the kernel**: 0x4000 to 0xF800, 46 KiB. A block
+is 256 bytes, one page of the flash; a screen is 4 blocks; there are screens
+0 to 45. `n LIST` shows a screen and `n LOAD` interprets it. A block that was
+changed (`UPDATE`) is written when its buffer is wanted for another, or by
+`FLUSH`. A flash that was never written reads as FF, which `LIST` shows as
+rubbish; the sixforths source lines are still there until they are written
+over.
 
-It has run in an emulator only. The nucleus alone has been on the chip; the
-high-level words have not.
+**Not here: the editor**, and `FLUSH`, which the model defines on its editor
+screens. Until then, type it:
+
+    : FLUSH  [ LIMIT FIRST - B/BUF 8 + / ] LITERAL 0 DO 32767 BUFFER DROP LOOP ;
+
+The nucleus and the high-level words without the disc have run on the chip:
+the lines of `tests/test_listings.py` were typed at it. The disc has run in
+the emulator only.
 
 ## Files
 
@@ -35,7 +48,8 @@ high-level words have not.
 |---|---|
 | `figforth.asm` | the nucleus: the CODE words, in the order of the model's screens, and the cold start |
 | `listings.asm` | the high-level words: colon definitions written out as threads, with the code behind `;CODE` |
-| `board.asm` | the chip (CH32V006): vector table, clock, console UART, trap handler |
+| `board.asm` | the chip (CH32V006): vector table, clock, console UART, trap handler, flash page writer |
+| `fig-FORTH_Installation_Manual.pdf` | the model: its screens are what `listings.asm` was written from |
 | `tools/header.py` | prints the header of a word, to paste into the source |
 | `tests/test_nucleus.py` | assembles the image and runs every word of the nucleus in the emulator |
 | `tests/test_listings.py` | starts the image in the emulator and types lines at it |
@@ -44,13 +58,13 @@ high-level words have not.
 ## Build, test, flash
 
     pip install bronzebeard
-    make            # figforth.bin, 9020 bytes, and figforth.labels
-    make test       # 402 checks of the nucleus, 131 of the listings
+    make            # figforth.bin, 11076 bytes, and figforth.labels
+    make test       # 402 checks of the nucleus, 177 of the listings
     make flash      # minichlink -w figforth.bin flash -b
     make term       # picocom -b 115200 /dev/ttyACM0
 
 `make flash` replaces the kernel that is on the board (sixforths). The image is
-under 16 KiB, so the source lines sixforths keeps from 0x4000 on are not touched.
+under 16 KiB, so it does not reach the disc at 0x4000.
 After it, the console should show `fig-FORTH RISC-V` and wait for a line. The
 terminal needs no character maps: `CR` sends CR and LF, and Enter is CR, as
 the model expects. Backspace is the key that sends 7F.
@@ -89,7 +103,19 @@ odd `ALLOT`. The text after `(.")` is padded the same way.
 
 **The kernel is in flash**, so nothing in it can change. The body of the
 `FORTH` vocabulary (its newest word) is three cells at the start of RAM that
-`COLD` fills, and `FORTH` is a colon definition.
+`COLD` fills, and `FORTH` is a colon definition. `USE` and `PREV` are user
+variables.
+
+**The disc** is the manual's RAM disc (`R/W` between `LO` and `HI`, section
+"RAM DISC SIMULATION"), with the flash as the memory: reading is its `CMOVE`,
+writing is the CODE word `BLOCK-WRITE`, which erases and programs a page and
+reads it back. It refuses any address that is not a block of the disc, so the
+kernel cannot be written over from Forth. `B/BUF` is 256 because the chip
+programs 256 bytes at a time; a buffer is `B/BUF` + 8. There are three
+buffers: the manual asks for two or more, but with two its `FLUSH` can pass a
+changed buffer by. A cold start does `EMPTY-BUFFERS`, which the manual leaves
+to the operator: here a buffer of leftover RAM could be written to the flash.
+There is one drive, so no `DR1`.
 
 **Everything else is the model's**, definition for definition: `<` is `- 0<`,
 an error leaves `IN` and `BLK` on the stack, `LEAVE` ends the loop at the next
@@ -107,9 +133,10 @@ ones; neither traps.
 
 **Memory.** Flash from 0: vector table, serial routines, the `origin` table
 (cold and warm entry, the cells `COLD` copies to the user area), the
-dictionary. RAM from the top: 8 cells left free, data stack (56 cells), return
-stack (64 cells), machine stack (24 cells), terminal input buffer (96 bytes),
-user area (32 cells). RAM from the bottom: the body of `FORTH` (3 cells), then
+dictionary, and from 0x4000 the disc. RAM from the top: 8 cells left free,
+data stack (56 cells), return stack (64 cells), machine stack (24 cells), the
+three disc buffers (792 bytes), terminal input buffer (96 bytes), user area
+(32 cells). RAM from the bottom: the body of `FORTH` (3 cells), then
 the dictionary of new words. The free cells are for a word run on an empty
 stack: it reads them, prints `MSG # 1`, and the chip does not trap. Nothing
 guards the other end: more than 56 items run into the return stack.
@@ -123,6 +150,8 @@ Found while writing this; each was tried.
   checks every header.
 - **`last_nfa:`** stands on the name field of the newest word (in
   `listings.asm`). Move that line when a word is added at the end.
+- **`call` beyond 2 KiB is wrong.** bronzebeard makes it one `jal` and keeps
+  only the low 12 bits of the distance. Write `jal ra, label`.
 - **`string` and `#`.** A name or a text with `#` `"` `'` or `,` in it is written
   as numbers (`bytes`); `tools/header.py` does that.
 - **A label cannot be a Python keyword**: `in:` `if:` `else:` `while:` `and:`
@@ -141,19 +170,12 @@ Found while writing this; each was tried.
   forms before the addresses are final; with this source, `li IP, abort + CELL`
   then stops the assembly with "imm must not be 0".
 
-## Next: the disc
+## Next: the editor
 
-The model keeps source on disc, in screens of 1 KiB, and the editor is loaded
-from there. The chip has no disc; the flash from 0x4000 up is free (46 KiB).
-What that needs, none of it written:
-
-- a word that writes a page of flash, in `board.asm`, and `R/W` on top of it
-- the block buffers, in RAM: one screen and its header is 1028 bytes of the
-  8 KiB
-- `USE` and `PREV` as user variables: in the model they are variables with
-  their value in the dictionary, which is flash here
-- the disc half of `WORD`, `QUIT`, `ERROR`, `MESSAGE` and the null word, marked
-  in `listings.asm`
+The model's editor is on screens 87 to 97 of the manual, in Forth, with one
+CODE word (`MATCH`). It is to be typed onto the disc and loaded from there.
+Its screens are written for a block of 128 bytes in two places (`FLUSH` and
+`COPY` use `B/BUF 4 +` and `2 -`, which are `B/BUF 8 +` and `4 -` here).
 
 ## Licence
 
