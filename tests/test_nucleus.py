@@ -182,6 +182,9 @@ check("the return stack at the prompt: QUIT is in QUERY, in EXPECT, in its loop"
 check("the body of FORTH is in RAM",
       [peek(BOOTED, RAM), peek(BOOTED, RAM + CELL), peek(BOOTED, RAM + 2 * CELL)],
       [0xA0202081, L["last_nfa"], 0])
+check("and the body of EDITOR",
+      [peek(BOOTED, RAM + 3 * CELL), peek(BOOTED, RAM + 4 * CELL), peek(BOOTED, RAM + 5 * CELL)],
+      [0xA0202081, L["last_enfa"], RAM + 2 * CELL])
 check("mtvec", BOOTED.csr.get(0x305), 3)
 check("sp", BOOTED.x[2], R0 - 64 * CELL)
 
@@ -203,7 +206,7 @@ e = copy.deepcopy(BOOTED)
 poke(e, UP + CELL * 9, 0x12345678)
 e.pc = L["origin"]
 run_to(e, idle)
-check("cold start resets DP", peek(e, UP + CELL * 9), RAM + 3 * CELL)
+check("cold start resets DP", peek(e, UP + CELL * 9), RAM + 6 * CELL)
 
 # the trap handler prints mcause and mepc
 e = copy.deepcopy(BOOTED)

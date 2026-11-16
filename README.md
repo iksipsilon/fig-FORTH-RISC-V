@@ -5,11 +5,12 @@ written for the [bronzebeard](https://github.com/theandrew168/bronzebeard)
 assembler. The first target is the WCH CH32V006 (RV32EC, 62 KiB flash,
 8 KiB RAM).
 
-**What is here: the kernel of the model.** The 46 CODE words (the nucleus) and
-172 high-level words: the text interpreter, the compiler, the defining words,
-vocabularies, number input and output, `FORGET`, `VLIST`, and the disc:
-`BLOCK` `BUFFER` `UPDATE` `LOAD` `-->` `LIST` `INDEX` `TRIAD`. It starts, reads a
-line, and answers `OK`:
+**What is here: the model, with its editor.** The 46 CODE words (the nucleus),
+176 high-level words in `FORTH` (the text interpreter, the compiler, the
+defining words, vocabularies, number input and output, `FORGET`, `VLIST`, and
+the disc: `BLOCK` `BUFFER` `UPDATE` `LOAD` `-->` `LIST` `INDEX` `TRIAD`) and the
+28 words of the `EDITOR` vocabulary. It starts, reads a line, and answers
+`OK`:
 
     fig-FORTH RISC-V
     : SQ DUP * ; OK
@@ -33,14 +34,36 @@ changed (`UPDATE`) is written when its buffer is wanted for another, or by
 rubbish; the sixforths source lines are still there until they are written
 over.
 
-**Not here: the editor**, and `FLUSH`, which the model defines on its editor
-screens. Until then, type it:
+**The editor** is the sample editor of the manual (screens 87 to 97), in the
+kernel. `EDITOR` makes its words known; a `:` or a `LOAD` goes back to
+`FORTH`, so say `EDITOR` again after one.
 
-    : FLUSH  [ LIMIT FIRST - B/BUF 8 + / ] LITERAL 0 DO 32767 BUFFER DROP LOOP ;
+    EDITOR
+    1 CLEAR                 fill screen 1 with blanks; it is now the screen
+    0 P : SQ DUP * ;        put text on line 0
+    1 P 7 SQ .
+    L                       list the screen
+    FLUSH                   write it to the disc
+    1 LOAD                  49
+
+| | |
+|---|---|
+| `n CLEAR` `n1 n2 COPY` | blank a screen; copy screen n1 to n2 (`FLUSH` first) |
+| `L` `n T` | list the screen; type line n and hold it |
+| `n P text` `n E` | put text on line n; erase line n |
+| `n H` `n R` `n I` | hold line n; replace line n by what is held; insert it at n |
+| `n D` `n S` | delete line n (it is held); spread, making line n blank |
+| `TOP` `n M` | cursor to the top; move it by n characters |
+| `F text` `N` `B` | find text; find it again; back over it |
+| `X text` `TILL text` | find and delete text; delete from the cursor up to text |
+| `C text` | put text in at the cursor |
+| `FLUSH` | write all changed blocks to the disc |
+
+After an error in a `LOAD`, `WHERE` shows the line and enters the editor.
 
 The nucleus and the high-level words without the disc have run on the chip:
-the lines of `tests/test_listings.py` were typed at it. The disc has run in
-the emulator only.
+the lines of `tests/test_listings.py` were typed at it. The disc and the
+editor have run in the emulator only.
 
 ## Files
 
@@ -58,8 +81,8 @@ the emulator only.
 ## Build, test, flash
 
     pip install bronzebeard
-    make            # figforth.bin, 11076 bytes, and figforth.labels
-    make test       # 402 checks of the nucleus, 177 of the listings
+    make            # figforth.bin, 13016 bytes, and figforth.labels
+    make test       # 403 checks of the nucleus, 206 of the listings
     make flash      # minichlink -w figforth.bin flash -b
     make term       # picocom -b 115200 /dev/ttyACM0
 
@@ -103,7 +126,8 @@ odd `ALLOT`. The text after `(.")` is padded the same way.
 
 **The kernel is in flash**, so nothing in it can change. The body of the
 `FORTH` vocabulary (its newest word) is three cells at the start of RAM that
-`COLD` fills, and `FORTH` is a colon definition. `USE` and `PREV` are user
+`COLD` fills, and `FORTH` is a colon definition. `EDITOR` is the same, in the
+next three cells. `USE` and `PREV` are user
 variables.
 
 **The disc** is the manual's RAM disc (`R/W` between `LO` and `HI`, section
@@ -116,6 +140,12 @@ buffers: the manual asks for two or more, but with two its `FLUSH` can pass a
 changed buffer by. A cold start does `EMPTY-BUFFERS`, which the manual leaves
 to the operator: here a buffer of leftover RAM could be written to the flash.
 There is one drive, so no `DR1`.
+
+**The editor** is in the kernel because the model's last screen makes it so:
+it moves `FENCE` and the cold start values past the editor. Its one CODE
+word, `MATCH`, is translated from the 6502, as the manual allows. In `FLUSH`
+and `COPY` the model's `B/BUF 4 +` and `2 -` are for its buffer; here the
+count of buffers is a number and the step back to the block number is 4.
 
 **Everything else is the model's**, definition for definition: `<` is `- 0<`,
 an error leaves `IN` and `BLK` on the stack, `LEAVE` ends the loop at the next
@@ -136,7 +166,7 @@ ones; neither traps.
 dictionary, and from 0x4000 the disc. RAM from the top: 8 cells left free,
 data stack (56 cells), return stack (64 cells), machine stack (24 cells), the
 three disc buffers (792 bytes), terminal input buffer (96 bytes), user area
-(32 cells). RAM from the bottom: the body of `FORTH` (3 cells), then
+(32 cells). RAM from the bottom: the bodies of `FORTH` and `EDITOR` (6 cells), then
 the dictionary of new words. The free cells are for a word run on an empty
 stack: it reads them, prints `MSG # 1`, and the chip does not trap. Nothing
 guards the other end: more than 56 items run into the return stack.
@@ -170,12 +200,10 @@ Found while writing this; each was tried.
   forms before the addresses are final; with this source, `li IP, abort + CELL`
   then stops the assembly with "imm must not be 0".
 
-## Next: the editor
+## Next
 
-The model's editor is on screens 87 to 97 of the manual, in Forth, with one
-CODE word (`MATCH`). It is to be typed onto the disc and loaded from there.
-Its screens are written for a block of 128 bytes in two places (`FLUSH` and
-`COPY` use `B/BUF 4 +` and `2 -`, which are `B/BUF 8 +` and `4 -` here).
+The screens of error messages (4 and 5 in the manual) are not on the disc.
+Type them with the editor and set `1 WARNING !` to have errors in words.
 
 ## Licence
 

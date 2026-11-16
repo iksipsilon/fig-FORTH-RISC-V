@@ -3618,7 +3618,6 @@ triad1:
 #            DUP 0= ?TERMINAL OR UNTIL DROP ;
 align 4
 n_vlist:
-last_nfa:
     db 0x85
     string VLIST
     bytes 0x20 0xA0
@@ -3658,4 +3657,798 @@ vlist2:
     dw zbran
     dw %offset(vlist1)
     dw drop
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# THE EDITOR: TEXT, LINE, WHERE
+#
+# Screens 87 to 97 of the manual, the sample editor. Its last screen puts the
+# editor below FENCE and makes it part of the system that a cold start
+# brings up; this is that system. Three words are in FORTH, the rest in the
+# EDITOR vocabulary.
+#
+# EDITOR is made by VOCABULARY in the model. Like FORTH, its body is three
+# cells of RAM that COLD fills (EDITOR_VOC), and it is a colon definition.
+
+# TEXT  ( c -- )  take the text up to the delimiter c to PAD, with blanks to
+#        the length of a line
+#   : TEXT  HERE C/L 1+ BLANKS WORD HERE PAD C/L 1+ CMOVE ;
+align 4
+n_text:
+    db 0x84
+    string TEXT
+    bytes 0x20 0x20 0xA0
+    dw n_vlist
+text:
+    dw docol
+    dw here
+    dw csll
+    dw onep
+    dw blank
+    dw wordd
+    dw here
+    dw pad
+    dw csll
+    dw onep
+    dw cmove
+    dw semis
+
+# LINE  ( n -- addr )  line n of the screen SCR; error 23 unless n is 0 to 15
+#   : LINE  DUP -16 AND 23 ?ERROR SCR @ (LINE) DROP ;
+align 4
+n_line:
+    db 0x84
+    string LINE
+    bytes 0x20 0x20 0xA0
+    dw n_text
+line:
+    dw docol
+    dw dup
+    dw lit
+    dw -16
+    dw andd
+    dw lit
+    dw 23
+    dw qerr
+    dw scr
+    dw at
+    dw pline
+    dw drop
+    dw semis
+
+# EDITOR  ( -- )  make EDITOR the CONTEXT vocabulary
+#   : EDITOR  EDITOR_VOC+CELL CONTEXT ! ;  IMMEDIATE
+align 4
+n_editor:
+    db 0xC6
+    string EDITOR
+    bytes 0xA0
+    dw n_line
+editor:
+    dw docol
+    dw lit
+    dw EDITOR_VOC+CELL
+    dw cont
+    dw store
+    dw semis
+
+# WHERE  ( in blk -- )  after an error in a LOAD, with the two numbers the error
+#        left: show the screen and the line, mark the place, enter the editor
+#   : WHERE  DUP B/SCR / DUP SCR ! ." SCR # " DECIMAL .
+#            SWAP C/L /MOD C/L * ROT BLOCK + CR C/L TYPE
+#            CR HERE C@ - SPACES 94 EMIT [COMPILE] EDITOR QUIT ;
+align 4
+n_where:
+last_nfa:
+    db 0x85
+    string WHERE
+    bytes 0x20 0xA0
+    dw n_editor
+where:
+    dw docol
+    dw dup
+    dw bscr
+    dw slash
+    dw dup
+    dw scr
+    dw store
+    dw pdotq
+    db 6
+    bytes 0x53 0x43 0x52 0x20 0x23 0x20    # SCR #
+align 4
+    dw decim
+    dw dot
+    dw swap
+    dw csll
+    dw slmod
+    dw csll
+    dw star
+    dw rot
+    dw block
+    dw plus
+    dw cr
+    dw csll
+    dw typee
+    dw cr
+    dw here
+    dw cat
+    dw subb
+    dw spacs
+    dw lit
+    dw 94
+    dw emit
+    dw editor
+    dw quit
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# THE EDITOR VOCABULARY: LINES
+#
+# The link field of the first word holds the address of FORTH's blank name,
+# which is what VOCABULARY puts into a new vocabulary: a search goes on
+# from there into FORTH.
+#
+# Some of these words have the names of FORTH words: I and R. Where the
+# model writes FORTH I or FORTH R it means the old one, and so does the
+# thread. R# is the cursor: its offset from the start of the screen.
+
+# #LOCATE  ( -- offset line )  where the cursor is
+#   : #LOCATE  R# @ C/L /MOD ;
+align 4
+n_e_locat:
+    db 0x87
+    bytes 0x23 0x4C 0x4F 0x43 0x41 0x54 0xC5 # #LOCATE
+    dw FORTH_VOC                # the blank name of FORTH: on into FORTH
+e_locat:
+    dw docol
+    dw rnum
+    dw at
+    dw csll
+    dw slmod
+    dw semis
+
+# #LEAD  ( -- addr offset )  the cursor's line and the offset in it
+#   : #LEAD  #LOCATE LINE SWAP ;
+align 4
+n_e_lead:
+    db 0x85
+    bytes 0x23 0x4C 0x45 0x41 0x44 0x20 0xA0 # #LEAD
+    dw n_e_locat
+e_lead:
+    dw docol
+    dw e_locat
+    dw line
+    dw swap
+    dw semis
+
+# #LAG  ( -- addr n )  the cursor's address and the characters after it
+#   : #LAG  #LEAD DUP >R + C/L R> - ;
+align 4
+n_e_lag:
+    db 0x84
+    bytes 0x23 0x4C 0x41 0x47 0x20 0x20 0xA0 # #LAG
+    dw n_e_lead
+e_lag:
+    dw docol
+    dw e_lead
+    dw dup
+    dw tor
+    dw plus
+    dw csll
+    dw fromr
+    dw subb
+    dw semis
+
+# -MOVE  ( addr n -- )  move a line from addr to line n
+#   : -MOVE  LINE C/L CMOVE UPDATE ;
+align 4
+n_e_move:
+    db 0x85
+    string -MOVE
+    bytes 0x20 0xA0
+    dw n_e_lag
+e_move:
+    dw docol
+    dw line
+    dw csll
+    dw cmove
+    dw updat
+    dw semis
+
+# H  ( n -- )  hold line n at PAD
+#   : H  LINE PAD 1+ C/L DUP PAD C! CMOVE ;
+align 4
+n_e_h:
+    db 0x81
+    string H
+    bytes 0x20 0xA0
+    dw n_e_move
+e_h:
+    dw docol
+    dw line
+    dw pad
+    dw onep
+    dw csll
+    dw dup
+    dw pad
+    dw cstor
+    dw cmove
+    dw semis
+
+# E  ( n -- )  erase line n with blanks
+#   : E  LINE C/L BLANKS UPDATE ;
+align 4
+n_e_e:
+    db 0x81
+    string E
+    bytes 0x20 0xA0
+    dw n_e_h
+e_e:
+    dw docol
+    dw line
+    dw csll
+    dw blank
+    dw updat
+    dw semis
+
+# S  ( n -- )  spread: make line n blank; the lines from n on move down, and
+#        line 15 is lost
+#   : S  DUP 1 - 14 DO I LINE I 1+ -MOVE -1 +LOOP E ;
+align 4
+n_e_s:
+    db 0x81
+    string S
+    bytes 0x20 0xA0
+    dw n_e_e
+e_s:
+    dw docol
+    dw dup
+    dw one
+    dw subb
+    dw lit
+    dw 14
+    dw xdo
+e_s1:
+    dw ido
+    dw line
+    dw ido
+    dw onep
+    dw e_move
+    dw lit
+    dw -1
+    dw xploo
+    dw %offset(e_s1)
+    dw e_e
+    dw semis
+
+# D  ( n -- )  delete line n, but hold it at PAD; the lines below move up
+#   : D  DUP H 15 DUP ROT DO I 1+ LINE I -MOVE LOOP E ;
+align 4
+n_e_d:
+    db 0x81
+    string D
+    bytes 0x20 0xA0
+    dw n_e_s
+e_d:
+    dw docol
+    dw dup
+    dw e_h
+    dw lit
+    dw 15
+    dw dup
+    dw rot
+    dw xdo
+e_d1:
+    dw ido
+    dw onep
+    dw line
+    dw ido
+    dw e_move
+    dw xloop
+    dw %offset(e_d1)
+    dw e_e
+    dw semis
+
+# M  ( n -- )  move the cursor by n and type its line, the cursor shown as _
+#   : M  R# +! CR SPACE #LEAD TYPE 95 EMIT
+#        #LAG TYPE #LOCATE . DROP ;
+align 4
+n_e_m:
+    db 0x81
+    string M
+    bytes 0x20 0xA0
+    dw n_e_d
+e_m:
+    dw docol
+    dw rnum
+    dw pstor
+    dw cr
+    dw space
+    dw e_lead
+    dw typee
+    dw lit
+    dw 95
+    dw emit
+    dw e_lag
+    dw typee
+    dw e_locat
+    dw dot
+    dw drop
+    dw semis
+
+# T  ( n -- )  type line n, and hold it at PAD
+#   : T  DUP C/L * R# ! DUP H 0 M ;
+align 4
+n_e_t:
+    db 0x81
+    string T
+    bytes 0x20 0xA0
+    dw n_e_m
+e_t:
+    dw docol
+    dw dup
+    dw csll
+    dw star
+    dw rnum
+    dw store
+    dw dup
+    dw e_h
+    dw zero
+    dw e_m
+    dw semis
+
+# L  ( -- )  list the screen again
+#   : L  SCR @ LIST 0 M ;
+align 4
+n_e_l:
+    db 0x81
+    string L
+    bytes 0x20 0xA0
+    dw n_e_t
+e_l:
+    dw docol
+    dw scr
+    dw at
+    dw listt
+    dw zero
+    dw e_m
+    dw semis
+
+# R  ( n -- )  replace line n by the text at PAD
+#   : R  PAD 1+ SWAP -MOVE ;
+align 4
+n_e_r:
+    db 0x81
+    string R
+    bytes 0x20 0xA0
+    dw n_e_l
+e_r:
+    dw docol
+    dw pad
+    dw onep
+    dw swap
+    dw e_move
+    dw semis
+
+# P  ( n -- )  put the text that follows on line n
+#   : P  1 TEXT R ;
+align 4
+n_e_p:
+    db 0x81
+    string P
+    bytes 0x20 0xA0
+    dw n_e_r
+e_p:
+    dw docol
+    dw one
+    dw text
+    dw e_r
+    dw semis
+
+# I  ( n -- )  insert the text at PAD at line n; the lines below move down
+#   : I  DUP S R ;
+align 4
+n_e_i:
+    db 0x81
+    string I
+    bytes 0x20 0xA0
+    dw n_e_p
+e_i:
+    dw docol
+    dw dup
+    dw e_s
+    dw e_r
+    dw semis
+
+# TOP  ( -- )  the cursor to the top left of the screen
+#   : TOP  0 R# ! ;
+align 4
+n_e_top:
+    db 0x83
+    string TO
+    db 0xD0                 # P + 0x80
+    dw n_e_i
+e_top:
+    dw docol
+    dw zero
+    dw rnum
+    dw store
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# THE EDITOR VOCABULARY: SCREENS
+#
+# FLUSH takes every buffer once. The model computes how many there are,
+# [ LIMIT FIRST - B/BUF 4 + / ] LITERAL, and here that number is NBUF. In
+# COPY its 2 - is 4 -, the cell that holds the block number.
+
+# CLEAR  ( n -- )  fill screen n with blanks; it becomes SCR
+#   : CLEAR  SCR ! 16 0 DO FORTH I EDITOR E LOOP ;
+align 4
+n_e_clear:
+    db 0x85
+    string CLEAR
+    bytes 0x20 0xA0
+    dw n_e_top
+e_clear:
+    dw docol
+    dw scr
+    dw store
+    dw lit
+    dw 16
+    dw zero
+    dw xdo
+e_clear1:
+    dw ido
+    dw e_e
+    dw xloop
+    dw %offset(e_clear1)
+    dw semis
+
+# FLUSH  ( -- )  write all changed blocks to the disc
+#   : FLUSH  NBUF 0 DO 32767 BUFFER DROP LOOP ;
+align 4
+n_e_flush:
+    db 0x85
+    string FLUSH
+    bytes 0x20 0xA0
+    dw n_e_clear
+e_flush:
+    dw docol
+    dw lit
+    dw NBUF
+    dw zero
+    dw xdo
+e_flush1:
+    dw lit
+    dw 32767
+    dw buffe
+    dw drop
+    dw xloop
+    dw %offset(e_flush1)
+    dw semis
+
+# COPY  ( n1 n2 -- )  copy screen n1 to screen n2
+#   : COPY  B/SCR * OFFSET @ + SWAP B/SCR * B/SCR OVER + SWAP
+#           DO DUP FORTH I BLOCK 4 - ! 1+ UPDATE LOOP
+#           DROP FLUSH ;
+align 4
+n_e_copy:
+    db 0x84
+    string COPY
+    bytes 0x20 0x20 0xA0
+    dw n_e_flush
+e_copy:
+    dw docol
+    dw bscr
+    dw star
+    dw ofset
+    dw at
+    dw plus
+    dw swap
+    dw bscr
+    dw star
+    dw bscr
+    dw over
+    dw plus
+    dw swap
+    dw xdo
+e_copy1:
+    dw dup
+    dw ido
+    dw block
+    dw lit
+    dw 4
+    dw subb
+    dw store
+    dw onep
+    dw updat
+    dw xloop
+    dw %offset(e_copy1)
+    dw drop
+    dw e_flush
+    dw semis
+
+
+# ------------------------------------------------------------------------
+# THE EDITOR VOCABULARY: TEXT IN A LINE
+#
+# MATCH is the model's one CODE word here, for the 6502; the manual says it
+# may be translated. It looks for the text at addr2 (n2 characters) in the
+# n1 characters at addr1. Found: true, and the distance from addr1 to the
+# character after the text. Not found: false, and n1, which takes the cursor
+# to the next line.
+
+# MATCH  ( addr1 n1 addr2 n2 -- f n3 )
+align 4
+n_e_match:
+    db 0x85
+    string MATCH
+    bytes 0x20 0xA0
+    dw n_e_copy
+e_match:
+    dw e_match + CELL
+    lw a4, 0(DSP)               # n2
+    lw a3, CELL(DSP)            # addr2
+    lw a2, 2*CELL(DSP)          # n1, what is left of the line
+    lw a1, 3*CELL(DSP)          # addr1
+    addi DSP, DSP, 2*CELL
+    li a5, 0                    # how far the cursor has gone
+e_match1:
+    bltu a2, a4, e_match4       # less left than the text is long: not found
+    li t0, 0
+e_match2:
+    beq t0, a4, e_match3        # all of it was equal: found
+    add t1, a1, t0
+    lbu t1, 0(t1)
+    add t2, a3, t0
+    lbu t2, 0(t2)
+    addi t0, t0, 1
+    beq t1, t2, e_match2
+    addi a1, a1, 1              # try one character further on
+    addi a5, a5, 1
+    addi a2, a2, -1
+    j e_match1
+e_match3:
+    add a1, a5, a4              # to the character after the text
+    li a2, 1
+    sw a2, CELL(DSP)
+    j put
+e_match4:
+    add a1, a5, a2              # to the end of the line
+    sw zero, CELL(DSP)
+    j put
+
+# 1LINE  ( -- f )  look for the text at PAD from the cursor to the end of its
+#        line, and move the cursor
+#   : 1LINE  #LAG PAD COUNT MATCH R# +! ;
+align 4
+n_e_1line:
+    db 0x85
+    string 1LINE
+    bytes 0x20 0xA0
+    dw n_e_match
+e_1line:
+    dw docol
+    dw e_lag
+    dw pad
+    dw count
+    dw e_match
+    dw rnum
+    dw pstor
+    dw semis
+
+# FIND  ( -- )  look for the text at PAD from the cursor to the end of the
+#        screen; not there: the cursor to the top, and error 0 with the text
+#   : FIND  BEGIN 1023 R# @ <
+#           IF TOP PAD HERE C/L 1+ CMOVE 0 ERROR ENDIF
+#           1LINE UNTIL ;
+align 4
+n_e_find:
+    db 0x84
+    string FIND
+    bytes 0x20 0x20 0xA0
+    dw n_e_1line
+e_find:
+    dw docol
+e_find1:
+    dw lit
+    dw 1023
+    dw rnum
+    dw at
+    dw less
+    dw zbran
+    dw %offset(e_find2)
+    dw e_top
+    dw pad
+    dw here
+    dw csll
+    dw onep
+    dw cmove
+    dw zero
+    dw error
+e_find2:
+    dw e_1line
+    dw zbran
+    dw %offset(e_find1)
+    dw semis
+
+# DELETE  ( n -- )  delete the n characters before the cursor
+#   : DELETE  >R #LAG + FORTH R -
+#             #LAG R MINUS R# +!
+#             #LEAD + SWAP CMOVE
+#             R> BLANKS UPDATE ;
+align 4
+n_e_delete:
+    db 0x86
+    string DELETE
+    bytes 0xA0
+    dw n_e_find
+e_delete:
+    dw docol
+    dw tor
+    dw e_lag
+    dw plus
+    dw rr
+    dw subb
+    dw e_lag
+    dw rr
+    dw minus
+    dw rnum
+    dw pstor
+    dw e_lead
+    dw plus
+    dw swap
+    dw cmove
+    dw fromr
+    dw blank
+    dw updat
+    dw semis
+
+# N  ( -- )  find the next place the text at PAD occurs
+#   : N  FIND 0 M ;
+align 4
+n_e_n:
+    db 0x81
+    string N
+    bytes 0x20 0xA0
+    dw n_e_delete
+e_n:
+    dw docol
+    dw e_find
+    dw zero
+    dw e_m
+    dw semis
+
+# F  ( -- )  find the text that follows
+#   : F  1 TEXT N ;
+align 4
+n_e_f:
+    db 0x81
+    string F
+    bytes 0x20 0xA0
+    dw n_e_n
+e_f:
+    dw docol
+    dw one
+    dw text
+    dw e_n
+    dw semis
+
+# B  ( -- )  the cursor back by the length of the text at PAD
+#   : B  PAD C@ MINUS M ;
+align 4
+n_e_b:
+    db 0x81
+    string B
+    bytes 0x20 0xA0
+    dw n_e_f
+e_b:
+    dw docol
+    dw pad
+    dw cat
+    dw minus
+    dw e_m
+    dw semis
+
+# X  ( -- )  find the text that follows and delete it
+#   : X  1 TEXT FIND PAD C@ DELETE 0 M ;
+align 4
+n_e_x:
+    db 0x81
+    string X
+    bytes 0x20 0xA0
+    dw n_e_b
+e_x:
+    dw docol
+    dw one
+    dw text
+    dw e_find
+    dw pad
+    dw cat
+    dw e_delete
+    dw zero
+    dw e_m
+    dw semis
+
+# TILL  ( -- )  delete from the cursor to the end of the text that follows,
+#        which must be on the cursor's line
+#   : TILL  #LEAD + 1 TEXT 1LINE 0= 0 ?ERROR
+#           #LEAD + SWAP - DELETE 0 M ;
+align 4
+n_e_till:
+    db 0x84
+    string TILL
+    bytes 0x20 0x20 0xA0
+    dw n_e_x
+e_till:
+    dw docol
+    dw e_lead
+    dw plus
+    dw one
+    dw text
+    dw e_1line
+    dw zequ
+    dw zero
+    dw qerr
+    dw e_lead
+    dw plus
+    dw swap
+    dw subb
+    dw e_delete
+    dw zero
+    dw e_m
+    dw semis
+
+# C  ( -- )  put the text that follows in at the cursor; what was after the
+#        cursor moves right, and the end of the line is lost
+#   : C  1 TEXT PAD COUNT
+#        #LAG ROT OVER MIN >R
+#        FORTH R R# +!
+#        R - >R
+#        DUP HERE R CMOVE
+#        HERE #LEAD + R> CMOVE
+#        R> CMOVE UPDATE
+#        0 M ;
+align 4
+n_e_c:
+last_enfa:
+    db 0x81
+    string C
+    bytes 0x20 0xA0
+    dw n_e_till
+e_c:
+    dw docol
+    dw one
+    dw text
+    dw pad
+    dw count
+    dw e_lag
+    dw rot
+    dw over
+    dw minn
+    dw tor
+    dw rr
+    dw rnum
+    dw pstor
+    dw rr
+    dw subb
+    dw tor
+    dw dup
+    dw here
+    dw rr
+    dw cmove
+    dw here
+    dw e_lead
+    dw plus
+    dw fromr
+    dw cmove
+    dw fromr
+    dw cmove
+    dw updat
+    dw zero
+    dw e_m
     dw semis

@@ -91,11 +91,13 @@ FIRST_INIT = LIMIT_INIT - NBUF * BUF_SIZE
 TIB_INIT = FIRST_INIT - 96              # terminal input buffer, 96 bytes
 UP_INIT  = TIB_INIT - 128               # user area, 32 cells
 
-# RAM, from the bottom up: the body of the FORTH vocabulary (the kernel is in
-# flash and this must change with every new word), then the dictionary.
-FORTH_VOC = RAM_BASE                    # a name field that holds one blank,
-                                        # the newest word, the vocabulary link
-DP_INIT   = FORTH_VOC + 3 * CELL
+# RAM, from the bottom up: the bodies of the FORTH and EDITOR vocabularies
+# (the kernel is in flash and they must change with every new word), then the
+# dictionary. A body is a name field that holds one blank, the newest word,
+# and the link to the vocabulary before it.
+FORTH_VOC  = RAM_BASE
+EDITOR_VOC = FORTH_VOC + 3 * CELL
+DP_INIT    = EDITOR_VOC + 3 * CELL
 
 # docol docon dovar douse dodoe, the code that the code field of a colon
 # word, a constant, a variable, a user variable and a DOES> word points at,
@@ -141,7 +143,7 @@ boot_up:                        # the cells COLD copies to the user area
     dw 0                        # +0x2C  initial WARNING: 0, no disc yet
     dw DP_INIT                  # +0x30  initial FENCE
     dw DP_INIT                  # +0x34  cold start value for DP
-    dw FORTH_VOC + 2*CELL       # +0x38  cold start value for VOC-LINK
+    dw EDITOR_VOC + 2*CELL      # +0x38  cold start value for VOC-LINK
 
 
 # ---------------------------------------------------------------- SCR 13
@@ -1031,17 +1033,29 @@ stod:
 # COLD START
 #
 # The code of COLD; its header is in listings.asm. As in the model, a cold
-# start also sets the newest word of the FORTH vocabulary, from the first cell
-# of boot_up. Here it fills the whole body of FORTH, which is in RAM.
+# start also sets the newest word of the FORTH vocabulary. Here it fills the
+# bodies of FORTH and EDITOR, which are in RAM, from voc_up.
+
+align 4
+voc_up:
+    dw 0xA0202081               # FORTH: the name field, 81 20 20 A0, one blank
+    dw last_nfa                 #   its newest word
+    dw 0                        #   no vocabulary before it
+    dw 0xA0202081               # EDITOR
+    dw last_enfa
+    dw FORTH_VOC + 2*CELL       #   the vocabulary before it is FORTH
 
 cold:
-    li a1, FORTH_VOC
-    li a2, 0xA0202081           # the name field: 81 20 20 A0, one blank
-    sw a2, 0(a1)
-    li a2, boot_up
-    lw a2, 0(a2)
-    sw a2, CELL(a1)             # the newest word
-    sw zero, 2*CELL(a1)         # no vocabulary before this one
+    li a1, voc_up
+    li a2, FORTH_VOC
+    li a3, 6*CELL
+cold0:
+    lw a4, 0(a1)
+    sw a4, 0(a2)
+    addi a1, a1, CELL
+    addi a2, a2, CELL
+    addi a3, a3, -CELL
+    bnez a3, cold0
     li a3, 11*CELL              # all eleven cells of boot_up, VOC-LINK included
     li IP, coldt                # then empty the disc buffers, then ABORT
     j cold1

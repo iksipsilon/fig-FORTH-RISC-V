@@ -112,7 +112,13 @@ NAMES = [
     '-->', 'LO', 'HI', 'BLOCK-WRITE', 'R/W', "'", 'FORGET', 'BACK', 'BEGIN', 'ENDIF', 'THEN',
     'DO', 'LOOP', '+LOOP', 'UNTIL', 'END', 'AGAIN', 'REPEAT', 'IF', 'ELSE', 'WHILE', 'SPACES',
     '<#', '#>', 'SIGN', '#', '#S', 'D.R', 'D.', '.R', '.', '?', 'LIST', 'INDEX', 'TRIAD',
-    'VLIST'
+    'VLIST', 'TEXT', 'LINE', 'EDITOR', 'WHERE'
+]
+
+EDITOR_NAMES = [
+    '#LOCATE', '#LEAD', '#LAG', '-MOVE', 'H', 'E', 'S', 'D', 'M', 'T', 'L', 'R', 'P', 'I',
+    'TOP', 'CLEAR', 'FLUSH', 'COPY', 'MATCH', '1LINE', 'FIND', 'DELETE', 'N', 'F', 'B', 'X',
+    'TILL', 'C'
 ]
 
 def walk(image, nfa):
@@ -132,6 +138,8 @@ def walk(image, nfa):
         assert raw[n:] == b" " * (len(raw) - n), "padding of the name at %#x" % nfa
         words.append((raw[:n].decode(), nfa, b))
         nfa = int.from_bytes(image[end + 1:end + 5], "little")
+        if nfa == RAM:                      # the blank name of FORTH: the end of
+            break                           # another vocabulary
     return words
 
 WORDS = walk(IMAGE, L["last_nfa"])
@@ -139,9 +147,12 @@ check("the words after the nucleus, oldest first", [w[0] for w in reversed(WORDS
 check("the nucleus is under them", len(WORDS), 46 + len(NAMES))
 IMMEDIATE = {":", ";", "[", ";CODE", '."', "\0", "[COMPILE]", "LITERAL", "DLITERAL", "FORTH", "(",
              "'", "BEGIN", "ENDIF", "THEN", "DO", "LOOP", "+LOOP", "UNTIL", "END", "AGAIN",
-             "REPEAT", "IF", "ELSE", "WHILE", "-->"}
+             "REPEAT", "IF", "ELSE", "WHILE", "-->", "EDITOR"}
 check("the immediate words", {w[0] for w in WORDS if w[2] & 0x40}, IMMEDIATE)
 check("no thread or header is off the cell", len(IMAGE) % CELL, 0)
+EWORDS = walk(IMAGE, L["last_enfa"])
+check("the words of EDITOR, oldest first", [w[0] for w in reversed(EWORDS)], EDITOR_NAMES)
+check("none of them is immediate", [w[0] for w in EWORDS if w[2] & 0x40], [])
 
 # ---------------------------------------------------------------- the prompt
 
@@ -293,12 +304,12 @@ t(["VOCABULARY V IMMEDIATE", "V DEFINITIONS", ": X 7 ;", "FORTH DEFINITIONS", ":
    "Y ."], "7 ")
 err(["VOCABULARY V IMMEDIATE", "V DEFINITIONS", "FORTH", "FORGET DUP"], "FORGET? MSG # 24 ",
     "FORGET wants CONTEXT and CURRENT the same")
-t(["VOCABULARY V IMMEDIATE", "VOC-LINK @ ' V 12 + = . ' V 12 + @ %d = ." % (RAM + 2 * CELL)],
+t(["VOCABULARY V IMMEDIATE", "VOC-LINK @ ' V 12 + = . ' V 12 + @ %d = ." % (RAM + 5 * CELL)],
   "1 1 ", "the vocabulary link")
 
 e = copy.deepcopy(BOOTED)
 out = say(e, "VLIST")
-check("VLIST starts with the newest word", out.split()[:3], ["VLIST", "TRIAD", "INDEX"])
+check("VLIST starts with the newest word", out.split()[:3], ["WHERE", "EDITOR", "LINE"])
 check("VLIST ends with the oldest", out.split()[-3:], ["EXECUTE", "LIT", "OK"])
 check("VLIST shows every word", len(out.split()), len(WORDS) + 1)  # and OK
 check("VLIST keeps to the line", max(len(l) for l in out.split("\r\n")) < 80, True)
@@ -327,8 +338,7 @@ def block(e, n):
 def ask(e, line, want, what=None, ok="OK"):
     check(what or line, say(e, line), want + ok + "\r\n")
 
-# FLUSH is in the model's editor screens; typed here as it is there
-FLUSH = ": FLUSH [ LIMIT FIRST - B/BUF 8 + / ] LITERAL 0 DO 32767 BUFFER DROP LOOP ;"
+FLUSH = "EDITOR"                            # FLUSH is a word of the editor
 
 check("the disc starts above the kernel", len(IMAGE) <= LO, True)
 t("B/BUF . B/SCR . LIMIT FIRST - B/BUF 8 + / . LO . HI .", "256 4 3 16384 63488 ")
@@ -415,11 +425,91 @@ ask(e, "DROP", "DROP? EMPTY STACK", "with WARNING 1 a message is a line of scree
 ask(e, ": DUP ;", "DUP ISN'T UNIQUE ")
 ask(e, "FOO", "FOO? ", "message 0 is nothing", ok="")
 
+# ---------------------------------------------------------------- the editor
+
+def edit(lines, e=None):
+    """Type the lines at the editor; returns the machine and the last answer."""
+    e = e or copy.deepcopy(BOOTED)
+    say(e, "EDITOR")
+    for line in lines:
+        out = say(e, line)
+    return e, out
+
+def shown(text, n):
+    """What M types: the line with _ at the cursor, and the line number."""
+    return "\r\n " + text.ljust(65) + "%d OK\r\n" % n
+
+def lines_of(e, n):
+    """The lines of screen n as they are on the disc, without the blanks at the end."""
+    scr = bytes(e.f[LO + 1024 * n:LO + 1024 * (n + 1)])
+    return [scr[i:i + 64].decode("latin-1").rstrip(" ") for i in range(0, 1024, 64)]
+
+err("FLUSH", "FLUSH? MSG # 0 ", "the editor's words are not seen from FORTH")
+
+START = ["1 CLEAR", "0 P : SQ DUP * ;", "1 P 7 SQ ."]
+e, out = edit(START + ["FLUSH"])
+check("CLEAR, P and FLUSH: the screen is on the disc", lines_of(e, 1), [": SQ DUP * ;", "7 SQ ."] + [""] * 14)
+check("the kernel is as it was after editing", bytes(e.f[:len(IMAGE)]), IMAGE)
+ask(e, "1 LOAD", "49 ", "and can be loaded")
+e, out = edit(START + ["L"])
+check("L lists the screen and shows the cursor",
+      out, "\r\nSCR # 1 " + "".join("\r\n%3d %s" % (i, l) for i, l in enumerate([": SQ DUP * ;", "7 SQ ."] + [""] * 14))
+      + "\r\n" + shown("_: SQ DUP * ;", 0))
+e, out = edit(START + ["1 T"])
+check("T types a line", out, shown("_7 SQ .", 1))
+e, out = edit(START + ["TOP 5 M"])
+check("M moves the cursor", out, shown(": SQ _DUP * ;", 0))
+e, out = edit(START + ["TOP F DUP"])
+check("F finds a text: the cursor is after it", out, shown(": SQ DUP_ * ;", 0))
+e, out = edit(START + ["TOP F SQ", "N"])
+check("N finds the next one", out, shown("7 SQ_ .", 1))
+e, out = edit(START + ["TOP F DUP", "B"])
+check("B goes back over it", out, shown(": SQ _DUP * ;", 0))
+e, out = edit(START + ["TOP F DUP", "C  ROT"])
+check("C puts text in at the cursor", out, shown(": SQ DUP ROT_ * ;", 0))
+e, out = edit(START + ["TOP X DUP "])
+check("X finds a text and deletes it", out, shown(": SQ _* ;", 0))
+e, out = edit(START + ["TOP F SQ", "TILL *"])
+check("TILL deletes from the cursor to the end of a text", out, shown(": SQ_ ;", 0))
+e, out = edit(START + ["TOP F NOPE"])
+check("a text that is not on the screen", out, "NOPE? MSG # 0 \r\n")
+ask(e, "DROP DROP R# @ .", "0 ", "leaves the cursor at the top")
+e, out = edit(START + ["0 D", "FLUSH"])
+check("D deletes a line", lines_of(e, 1), ["7 SQ ."] + [""] * 15)
+e, out = edit(START + ["0 D", "1 I", "FLUSH"])
+check("and I inserts the line that was held", lines_of(e, 1), ["7 SQ .", ": SQ DUP * ;"] + [""] * 14)
+e, out = edit(START + ["0 H 3 R", "FLUSH"])
+check("H holds a line and R replaces one with it", lines_of(e, 1),
+      [": SQ DUP * ;", "7 SQ .", "", ": SQ DUP * ;"] + [""] * 12)
+e, out = edit(START + ["15 P LAST", "0 S", "FLUSH"])
+check("S spreads the lines; the last is lost", lines_of(e, 1), ["", ": SQ DUP * ;", "7 SQ ."] + [""] * 13)
+e, out = edit(START + ["1 E", "FLUSH"])
+check("E erases a line", lines_of(e, 1), [": SQ DUP * ;"] + [""] * 15)
+e, out = edit(START + ["FLUSH", "1 2 COPY"])
+check("COPY copies a screen, and flushes", lines_of(e, 2), lines_of(e, 1))
+check("and the first is there too", lines_of(e, 1), [": SQ DUP * ;", "7 SQ ."] + [""] * 14)
+e, out = edit(START + ["16 T"])
+check("a line that is not on the screen", out, "T? MSG # 23 \r\n")
+e, out = edit(["PAD 20 BLANKS 65 PAD C! 66 PAD 1+ C! 67 PAD 9 + C!",
+               "PAD 10 PAD 1 MATCH . . PAD 10 PAD 9 + 1 MATCH . . PAD 10 HERE 0 MATCH . ."])
+check("MATCH finds a text", out, "1 1 10 1 0 1 OK\r\n")
+e, out = edit(["PAD 20 BLANKS 65 PAD C! 66 PAD 1+ C! 67 PAD 10 + C!",
+               "PAD 10 PAD 10 + 1 MATCH . . PAD 1 PAD 2 MATCH . ."])
+check("MATCH does not look past the characters it was given", out, "10 0 1 0 OK\r\n")
+
+e = disc((3, ["1 .", "2 . FOO 3 ."]))
+say(e, "3 LOAD")
+check("WHERE shows the place of an error in a LOAD", say(e, "WHERE"),
+      "SCR # 3 \r\n2 . FOO 3 ." + " " * 53 + "\r\n" + " " * 3 + "^\r\n")
+# (the mark is under the end of FOO less the length of the word at HERE, which
+# the model takes to be the word in error: typed at the terminal it is WHERE)
+ask(e, "SCR @ . 1 T", "3 " + shown("_2 . FOO 3 .", 1)[:-len("OK\r\n")], "and enters the editor")
+
 # ---------------------------------------------------------------- cold and warm
 
 e = err([": T 5 ;", "COLD"], "\r\nfig-FORTH RISC-V", "COLD")
 check("COLD forgets the new words", say(e, "T"), "T? MSG # 0 \r\n")
-check("COLD puts the dictionary pointer back", say(e, "HERE ."), "%d OK\r\n" % (RAM + 3 * CELL))
+check("COLD puts the dictionary pointer back", say(e, "HERE ."), "%d OK\r\n" % (RAM + 6 * CELL))
 e = t([": T 5 ;", "HEX"], "")
 e.pc = L["origin"] + 4
 run_to_idle(e)
