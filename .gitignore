@@ -1,3 +1,4 @@
 figforth.bin
 figforth.labels
 __pycache__/
+.venv/
