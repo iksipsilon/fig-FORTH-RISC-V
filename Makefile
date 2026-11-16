@@ -5,11 +5,10 @@
 #   make flash    program the chip through a WCH-LinkE and restart it
 #   make term     the console: 115200 baud, Enter sends CR, Ctrl-A Ctrl-X quits
 
-BOARD ?= ch32v006
 TERMINAL ?= /dev/ttyACM0
 
-figforth.bin: figforth.asm boards/$(BOARD)/board.asm
-	bronzebeard -i boards/$(BOARD)/ -l figforth.labels -o figforth.bin figforth.asm
+figforth.bin: figforth.asm listings.asm board.asm
+	bronzebeard -i . -l figforth.labels -o figforth.bin figforth.asm
 
 .PHONY: test flash term clean
 

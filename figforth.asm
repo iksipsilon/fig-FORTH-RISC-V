@@ -17,7 +17,7 @@
 #
 #        Further distribution must include the above notice.
 #
-# Build:  bronzebeard -i boards/ch32v006/ -o figforth.bin figforth.asm
+# Build:  bronzebeard -i . -o figforth.bin figforth.asm
 #
 # The image must run at address 0: a label is an offset into the image, and
 # the threads hold labels as absolute addresses. The CH32V006 maps its flash
@@ -1065,50 +1065,8 @@ cold2:
 
 
 # ------------------------------------------------------------------------
-# A STAND-IN FOR ABORT
+# THE HIGH-LEVEL WORDS
 #
-# The model's ABORT (SCR 54) ends in QUIT, the text interpreter. Until the
-# high-level words are here, this prints a line and echoes the keys, which
-# shows that the inner interpreter runs on the chip. It is also an example of
-# a colon definition written by hand: docol in the code field, one code field
-# address per cell, and %offset after each branch.
-#
-#   : ABORT  SP!  CR  banner1 banner DO  I C@ EMIT  LOOP  CR
-#            BEGIN  KEY DUP EMIT  13 XOR 0=  IF  10 EMIT  ENDIF  AGAIN ;
+# The colon definitions of the model are in listings.asm. ABORT is there.
 
-align 4
-abort:
-    dw docol
-    dw spsto
-    dw cr
-    dw lit
-    dw banner1
-    dw lit
-    dw banner
-    dw xdo
-abort1:
-    dw ido
-    dw cat
-    dw emit
-    dw xloop
-    dw %offset(abort1)
-    dw cr
-abort2:
-    dw key
-    dw dup
-    dw emit
-    dw lit
-    dw 13
-    dw xorr
-    dw zequ
-    dw zbran
-    dw %offset(abort2)
-    dw lit
-    dw 10
-    dw emit
-    dw bran
-    dw %offset(abort2)
-
-banner:
-    string fig-FORTH RISC-V nucleus
-banner1:
+include listings.asm

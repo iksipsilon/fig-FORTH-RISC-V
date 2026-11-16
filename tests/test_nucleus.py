@@ -28,7 +28,7 @@ DATA = RAM + 0x800              # scratch memory for the tests
 # ---------------------------------------------------------------- build
 
 def build():
-    cmd = ["bronzebeard", "-i", os.path.join(ROOT, "boards", "ch32v006") + os.sep,
+    cmd = ["bronzebeard", "-i", ROOT + os.sep,
            "-l", os.path.join(ROOT, "figforth.labels"),
            "-o", os.path.join(ROOT, "figforth.bin"),
            os.path.join(ROOT, "figforth.asm")]

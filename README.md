@@ -22,7 +22,8 @@ It has run in an emulator only. It has not been on the chip.
 | | |
 |---|---|
 | `figforth.asm` | the nucleus, in the order of the model's screens |
-| `boards/ch32v006/board.asm` | the chip: vector table, clock, console UART, trap handler |
+| `listings.asm` | the high-level words, as threads; for now only the stand-in `ABORT` |
+| `board.asm` | the chip (CH32V006): vector table, clock, console UART, trap handler |
 | `tools/header.py` | prints the header of a word, to paste into the source |
 | `tests/test_nucleus.py` | assembles the image and runs every word in the emulator |
 | `tests/rv32emu.py` | the RV32EC emulator of the sixforths repository, unchanged |
