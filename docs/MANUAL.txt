@@ -883,6 +883,218 @@
   search for a text in a line. The model's is 6502 code and the manual
   says it may be translated; it is RISC-V here, in listings.asm.
 
+  FOR THE READER OF "STARTING FORTH". Leo Brodie's book (chapter 3)
+  teaches another editor, that of polyFORTH. It does the same things,
+  but under other letters, and some letters mean something else here.
+  Four differences first:
+
+  - Say EDITOR before the first command, and again after a definition
+    or a LOAD. In the book the commands are always known.
+  - The book's line commands work on the line of the cursor, which
+    n T chose. Here they take the line number: n is that line below.
+  - The book has two buffers, one for the text to find and one for the
+    text to insert. Here there is one, PAD, for both and for a held
+    line. The book's K, which exchanges the two, has no counterpart.
+  - In the book ^ may end a text. Here ^ is a character like any
+    other, and the text runs to the end of the line you type.
+
+      the book        here              what it does
+
+      n LIST          n LIST            list screen n, make it SCR
+      L               L                 list the screen again
+      N L             SCR @ 1+ LIST     the next screen
+      B L             SCR @ 1 - LIST    the screen before
+      n T             n T               type line n, cursor to its
+                                        start
+      P text          n P text          put the text on the line
+      P (2 blanks)    n E               make the line blank
+      P (no text)     n R               put the held line there
+      U text          n+1 S             put the text under the line;
+                      n+1 P text        the lines below move down
+      U (no text)     n+1 I             the same with the held line
+      X               n D               delete the line and hold it
+      F text          F text            find the text
+      F (no text)     N                 find it again
+      S text          -                 find it on the screens that
+                                        follow: not here
+      E               count DELETE      erase the text just found;
+                                        count is its length
+      D text          X text            find the text and delete it
+      R text          X old  C text     replace: here find and delete
+                                        the old text, put in the new
+      I text          C text            put the text in at the cursor
+      TILL text       TILL text         delete up to the end of the
+                                        text
+      WIPE            n CLEAR           fill the screen with blanks
+      n l M           n H  s LIST       line n to another screen s,
+                      EDITOR  l+1 I     under its line l
+      n1 n2 COPY      n1 n2 COPY        copy a screen
+      FLUSH           FLUSH             write the changes to the disc
+      EMPTY-BUFFERS   EMPTY-BUFFERS     forget the changes not yet
+                                        written
+
+  THE TRAPS are the letters that both editors have and that differ:
+
+      I     the book: put text in at the cursor.  Here: insert the
+            held line at line n. (Outside the editor I is the index
+            of a DO loop.)
+      R     the book: replace the text found.  Here: replace line n
+            by the held line.
+      E     the book: erase the text found.  Here: blank line n.
+      D     the book: find a text and delete it.  Here: delete line n.
+      X     the book: delete the line.  Here: find a text and delete
+            it. D and X have changed places.
+      S     the book: search over screens.  Here: spread at line n.
+      N B   the book: the next screen, the screen before.  Here: find
+            again, and the cursor back over the text.
+      M     the book: move a line to another screen.  Here: move the
+            cursor by n.
+
+  Typed without its number, a line command here takes whatever is on
+  the stack, or stops with MSG # 1 when the stack is empty.
+
+  TO DO: THE BOOK'S EDITOR ON TOP OF THIS ONE. Renaming the words above
+  would not give the book's editor: its line commands take no number,
+  it has two buffers, and E R S N B M do things this editor has no one
+  word for. What does give it is a second vocabulary, SF, whose words
+  are the book's and are made of the words of EDITOR. Nothing in the
+  kernel changes. The three screens below were typed into the emulator
+  and loaded, and every command was tried; they are not on the disc
+  and not in the tests. Do it by hand like this.
+
+  1. Pick three free screens that follow each other; 10 to 12 here.
+     For each say  EDITOR 10 CLEAR  and put the lines with  n P text ,
+     n from 0 up. No line is longer than 64. Then FLUSH and 10 LIST.
+
+     SCR # 10
+      0 ( STARTING FORTH EDITOR  1 OF 3: BUFFERS, LINES )
+      1 EDITOR DEFINITIONS  VOCABULARY SF IMMEDIATE  SF DEFINITIONS
+      2 0 VARIABLE IBUF 64 ALLOT   IBUF C/L 1+ BLANKS  0 IBUF C!
+      3 : ?TEXT  HERE C/L 1+ BLANKS  94 WORD  HERE 1+ C@
+      4    IF HERE SWAP C/L 1+ CMOVE ELSE DROP ENDIF ;
+      5 : LINE#  R# @ C/L / ;
+      6 : KEEP  LINE# LINE IBUF 1+ C/L CMOVE  C/L IBUF C! ;
+      7 : UNDER  LINE# 15 = 23 ?ERROR
+      8    LINE# 1+ DUP S  IBUF 1+ SWAP -MOVE ;
+      9 : T  DUP LINE DROP  C/L * R# !  0 M ;
+     10 : P  IBUF ?TEXT  IBUF 1+ LINE# -MOVE ;
+     11 : U  IBUF ?TEXT  UNDER  C/L R# +! ;
+     12 : X  KEEP  LINE# 15 < IF  15 LINE# DO
+     13    FORTH I 1+ LINE  I -MOVE  LOOP ENDIF  15 E ;
+     14 : WIPE  SCR @ CLEAR ;
+     15 -->
+
+     SCR # 11
+      0 ( STARTING FORTH EDITOR  2 OF 3: TEXT IN A LINE )
+      1 : F  PAD ?TEXT  N ;
+      2 : SEEK  BEGIN 1023 R# @ < IF 0 1 ELSE
+      3    1LINE IF 1 1 ELSE 0 ENDIF ENDIF UNTIL ;
+      4 : S  PAD ?TEXT  BEGIN SEEK 0= WHILE
+      5    SCR @ 1+ OVER < 0= IF PAD HERE C/L 1+ CMOVE 0 ERROR ENDIF
+      6    1 SCR +! TOP  REPEAT  DROP 0 M ;
+      7 : E  PAD C@ DELETE  0 M ;
+      8 : D  PAD ?TEXT  FIND  E ;
+      9 : TILL  #LEAD +  PAD ?TEXT  1LINE 0= 0 ?ERROR
+     10    #LEAD + SWAP - DELETE  0 M ;
+     11 : I  IBUF ?TEXT  IBUF COUNT  #LAG ROT OVER MIN >R
+     12    FORTH R R# +!  R - >R  DUP HERE R CMOVE
+     13    HERE #LEAD + R> CMOVE  R> CMOVE UPDATE  0 M ;
+     14 : R  PAD C@ DELETE  I ;
+     15 -->
+
+     SCR # 12
+      0 ( STARTING FORTH EDITOR  3 OF 3: SCREENS )
+      1 : K  PAD HERE C/L 1+ CMOVE  IBUF PAD C/L 1+ CMOVE
+      2    HERE IBUF C/L 1+ CMOVE ;
+      3 : N  1 SCR +! ;
+      4 : B  -1 SCR +! ;
+      5 : M  KEEP  SCR @ >R  R# @ >R  C/L * R# !  SCR !
+      6    UNDER  R> R# !  R> SCR ! ;
+      7 FORTH DEFINITIONS
+      8 ;S
+
+  2. 10 LOAD . It answers MSG # 4 thirteen times, once for each name
+     that is also in EDITOR or FORTH (T P X F S E D TILL I R N B M);
+     that is a warning and it goes on. The layer takes 1460 bytes of
+     the dictionary. It is gone at power-off or COLD: load it again.
+
+  3. EDITOR SF  makes the book's words known; say it where the text
+     above says EDITOR. The search goes SF, then EDITOR, then FORTH, so
+     L TOP COPY FLUSH and CLEAR are still there. Then, as in the book:
+
+         20 LIST  EDITOR SF  WIPE
+         0 T  P THE QUICK BROWN FOX
+         U JUMPS OVER THE
+         0 T  F QUICK
+         E  I SLOW
+         0 T  D BROWN ^  L
+
+  What the words are, and why they are written so:
+
+      IBUF     the insert buffer: a count, then 64 characters. PAD
+               stays what it is for FIND, 1LINE and DELETE, the find
+               buffer. That gives the book's two.
+      ?TEXT    ( buf -- ) the text up to ^ or the end of the line goes
+               to the buffer; no text leaves the buffer as it was,
+               which is how the book's F P U and I repeat themselves.
+               "No text" is not a count of 0: at the end of a line
+               WORD gives the null there, a count of 1. So the test is
+               on the first character, HERE 1+ C@ . (For the same
+               reason C alone, in EDITOR, puts in one null.)
+      LINE#    the line of the cursor.
+      KEEP     the cursor's line to IBUF.
+      UNDER    IBUF under the cursor's line, with S of EDITOR. On line
+               15 there is no line under it: MSG # 23.
+      T        not T of EDITOR, because that holds the line at PAD and
+               the text to find would be lost.
+      P U      ?TEXT, then -MOVE or UNDER. U moves the cursor to the
+               new line, so one U after another fills a screen.
+      X        D of EDITOR written out, since D holds at PAD; and line
+               15 is taken apart, where D asks for line 16.
+      F        N of EDITOR, with ?TEXT before it.
+      SEEK     FIND without its error: a flag instead.
+      S        ( n -- ) SEEK, screen after screen, and stops before
+               screen n as the book's does.
+      E        the text just found is the PAD C@ characters before the
+               cursor, and DELETE takes those.
+      D R      FIND then E; E then I.
+      TILL     the one of EDITOR, with ?TEXT for 1 TEXT.
+      I        C of EDITOR, word for word, the text from IBUF.
+      K        the two buffers change places, by way of HERE.
+      N B      SCR up or down by one; nothing is listed, say N L.
+               Neither looks whether the screen is on the disc.
+      M        ( scr line -- ) KEEP, go there, UNDER, come back.
+
+  Three things to watch when you change them:
+
+  - The order. A new name hides the old one from then on. F must come
+    before N, because it wants N of EDITOR. UNDER must come before S,
+    and every word that types the line with  0 M  before M.
+  - FORTH I and FORTH R, where the index of the loop and the top of
+    the return stack are meant: as in the model's own editor. FORTH
+    then stays the CONTEXT to the end of the definition, and the other
+    words are still found, through CURRENT.
+  - : makes CURRENT the CONTEXT. That is why SF DEFINITIONS stands at
+    the top, and why you say EDITOR SF again after a definition.
+
+  To make it part of the kernel, as the editor is, later:
+
+  - figforth.asm: a third vocabulary body in RAM, SF_VOC, after
+    EDITOR_VOC, and 68 bytes for IBUF after that; DP_INIT moves up.
+    Three more cells in voc_up (the blank name, the newest word of SF,
+    EDITOR_VOC + 2*CELL), COLD copies nine cells and not six, and the
+    cold start value of VOC-LINK is SF_VOC + 2*CELL. COLD must also
+    store the count 0 in IBUF: RAM is not empty at power-on.
+  - tools/words.py: SF as EDITOR is,  {SF_VOC+CELL} CONTEXT !  and
+    IMMEDIATE, in the EDITOR vocabulary; IBUF a constant, its address;
+    then the definitions above. The link field of the first word of SF
+    holds EDITOR_VOC, the address of EDITOR's blank name.
+  - tools/listing.py knows two vocabularies and must learn the third:
+    where a name is looked up, and the label on the newest word.
+  - tests: the check of the vocabulary bodies in test_nucleus.py, and
+    lines typed at SF in test_listings.py. Then make listing, make
+    test.
+
 
  ------------------------------------------------------------------------
  13  HOW THIS PORT DIFFERS FROM THE CLASSICAL ONES, AND WHY
