@@ -78,6 +78,8 @@ editor have run in the emulator only.
 | `tools/listing.py` | writes `listings.asm` from it (`make listing`) |
 | `tools/header.py` | prints the header of a word; `listing.py` uses it |
 | `tools/board_test.py` | types the tests at the real board (`make test-board`); writes over screens 40 and 41 |
+| `tools/forth-assembler.f` | an `ASSEMBLER` vocabulary for RISC-V, in Forth: four screens for the disc, `42 LOAD` (MANUAL.txt section 16) |
+| `tools/put_screens.py` | types a source file onto empty screens of the board's disc with the editor and reads them back (`make put-assembler`) |
 | `tests/test_nucleus.py` | assembles the image and runs every word of the nucleus in the emulator |
 | `tests/test_listings.py` | starts the image in the emulator and types lines at it |
 | `tests/rv32emu.py` | the RV32EC emulator of the sixforths repository, unchanged |

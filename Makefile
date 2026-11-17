@@ -7,6 +7,8 @@
 #   make listing  write listings.asm again from tools/words.py
 #   make test-board   type the tests at the real board (quit the console
 #                 first; screens 40 and 41 of the disc are written over)
+#   make put-assembler   put tools/forth-assembler.f on screens 42 to 45 of
+#                 the board's disc (they must be empty); then  42 LOAD
 
 TERMINAL ?= /dev/ttyACM0
 
@@ -16,13 +18,16 @@ figforth.bin: figforth.asm listings.asm board.asm
 listings.asm: tools/words.py tools/listing.py tools/header.py
 	python3 tools/listing.py
 
-.PHONY: test flash term clean listing test-board
+.PHONY: test flash term clean listing test-board put-assembler
 
 listing:
 	python3 tools/listing.py
 
 test-board: figforth.bin
 	python3 tools/board_test.py $(TERMINAL)
+
+put-assembler:
+	python3 tools/put_screens.py tools/forth-assembler.f 42 $(TERMINAL)
 
 test:
 	python3 tests/test_nucleus.py

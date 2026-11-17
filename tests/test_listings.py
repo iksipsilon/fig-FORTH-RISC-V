@@ -511,6 +511,90 @@ check("WHERE shows the place of an error in a LOAD", say(e, "WHERE"),
 # the model takes to be the word in error: typed at the terminal it is WHERE)
 ask(e, "SCR @ . 1 T", "3 " + shown("_2 . FOO 3 .", 1)[:-len("OK\r\n")], "and enters the editor")
 
+# ---------------------------------------------------------------- the assembler in Forth
+
+# tools/forth-assembler.f goes on the last four screens, as on the board
+# (MANUAL.txt section 16). Each instruction is compared with what bronzebeard
+# makes of the same instruction, and the manual's examples are run.
+import re, tempfile
+ASM = open(os.path.join(ROOT, "tools", "forth-assembler.f")).read().rstrip("\n").split("\n")
+ASM_SCR = 42
+check("forth-assembler.f is four screens", len(ASM), 64)
+check("no line of it runs into the next on a screen", max(len(l) for l in ASM) <= 63, True)
+check("each of the first three ends in -->", [ASM[16 * k + 15] for k in range(3)], ["-->"] * 3)
+e = disc(*[(ASM_SCR + k, ASM[16 * k:16 * k + 16]) for k in range(4)])
+ask(e, "%d LOAD" % ASM_SCR, ";CODE MSG # 4  ", "the assembler loads from the disc")
+ask(e, "BASE @ . CONTEXT @ CURRENT @ = .", "10 1 ", "and leaves DECIMAL and FORTH")
+ASMED = e
+
+# (Forth, bronzebeard); {k} is the address of instruction k
+CASES = [
+    ("A1 A2 A3 ADD,", "add a1, a2, a3"), ("A1 A2 A3 SUB,", "sub a1, a2, a3"),
+    ("A1 A2 A3 SLL,", "sll a1, a2, a3"), ("A1 A2 A3 SLT,", "slt a1, a2, a3"),
+    ("A1 A2 A3 SLTU,", "sltu a1, a2, a3"), ("A1 A2 A3 XOR,", "xor a1, a2, a3"),
+    ("A1 A2 A3 SRL,", "srl a1, a2, a3"), ("A1 A2 A3 SRA,", "sra a1, a2, a3"),
+    ("A1 A2 A3 OR,", "or a1, a2, a3"), ("T0 A5 IP AND,", "and t0, a5, s1"),
+    ("A1 A2 -5 ADDI,", "addi a1, a2, -5"), ("A1 A2 7FF SLTI,", "slti a1, a2, 0x7ff"),
+    ("A1 A2 -800 SLTIU,", "sltiu a1, a2, -2048"), ("A1 A2 -1 XORI,", "xori a1, a2, -1"),
+    ("A1 A2 F0 ORI,", "ori a1, a2, 0xf0"), ("A1 A2 FF ANDI,", "andi a1, a2, 0xff"),
+    ("A1 A2 3 SLLI,", "slli a1, a2, 3"), ("A1 A2 1F SRLI,", "srli a1, a2, 31"),
+    ("A1 A2 1F SRAI,", "srai a1, a2, 31"), ("RA A1 8 JALR,", "jalr ra, a1, 8"),
+    ("A1 -1 A2 LB,", "lb a1, -1(a2)"), ("A1 2 A2 LH,", "lh a1, 2(a2)"),
+    ("A1 7FC DSP LW,", "lw a1, 2044(s0)"), ("A1 3 A2 LBU,", "lbu a1, 3(a2)"),
+    ("A1 -2 A2 LHU,", "lhu a1, -2(a2)"),
+    ("A1 -800 A2 SB,", "sb a1, -2048(a2)"), ("A1 7FE A2 SH,", "sh a1, 2046(a2)"),
+    ("IP 4 RSP SW,", "sw s1, 4(tp)"),
+    ("A1 A2 {0} BEQ,", "beq a1, a2, L0"), ("A1 A2 {40} BNE,", "bne a1, a2, L40"),
+    ("A1 A2 {3} BLT,", "blt a1, a2, L3"), ("A1 A2 {33} BGE,", "bge a1, a2, L33"),
+    ("A1 A2 {5} BLTU,", "bltu a1, a2, L5"), ("A1 A2 {35} BGEU,", "bgeu a1, a2, L35"),
+    ("A1 40013 LUI,", "lui a1, 0x40013"), ("A1 FFFFF AUIPC,", "auipc a1, 0xfffff"),
+    ("RA {1} JAL,", "jal ra, L1"), ("ZERO {40} JAL,", "jal zero, L40"),
+    ("{20} J,", "jal zero, L20"), ("T0 JR,", "jalr zero, t0, 0"),
+    ("A1 A2 MV,", "addi a1, a2, 0"),
+]
+with tempfile.TemporaryDirectory() as d:
+    src = "".join("L%d:\n    %s\n" % (k, b) for k, (_, b) in enumerate(CASES)) + "L%d:\n" % len(CASES)
+    open(os.path.join(d, "cases.asm"), "w").write(src)
+    r = subprocess.run(["bronzebeard", "-o", os.path.join(d, "cases.bin"), os.path.join(d, "cases.asm")],
+                       capture_output=True, text=True)
+    if r.returncode:
+        sys.exit("bronzebeard failed on the cases:\n" + r.stdout + r.stderr)
+    want = open(os.path.join(d, "cases.bin"), "rb").read()
+e = copy.deepcopy(ASMED)
+say(e, "0 VARIABLE B0  HERE B0 !  ASSEMBLER HEX")
+start = int(say(e, "DECIMAL HERE . HEX").split()[0])
+for f, b in CASES:      # a hex address is written 0A0, not A0: that is the register
+    say(e, re.sub(r"\{(\d+)\}", lambda m: "B0 @ 0%X +" % (4 * int(m.group(1))), f))
+for k, (f, b) in enumerate(CASES):
+    check("%s is %s" % (f, b), "%08X" % peek(e, start + 4 * k),
+          "%08X" % int.from_bytes(want[4 * k:4 * k + 4], "little"))
+
+def asm(lines, want, what):
+    """Type the lines at the machine with the assembler loaded."""
+    e = copy.deepcopy(ASMED)
+    for line in lines[:-1]:
+        check(what + ": " + line, say(e, line), "OK\r\n")
+    check(what, say(e, lines[-1]), want + "OK\r\n")
+
+asm(["CODE 2*  A1 0 DSP LW,  A1 A1 A1 ADD,  A1 PUT,  END-CODE", "21 2* ."], "42 ", "a CODE word")
+asm(["CODE TWO  A1 ZERO 2 ADDI,  A1 PUSH,  END-CODE", "TWO TWO + ."], "4 ", "PUSH,")
+asm(["CODE SGN  A1 0 DSP LW,",
+     "  A1 ZERO LT IF,  A1 ZERO -1 ADDI,  ELSE,  A1 ZERO 1 ADDI,  THEN,",
+     "  A1 PUT,  END-CODE", "-5 SGN . 5 SGN ."], "-1 1 ", "IF, ELSE, THEN,")
+asm(["CODE SUMTO ( n -- 1+2+...+n )  A1 0 DSP LW,  A2 ZERO MV,",
+     "  BEGIN,  A2 A2 A1 ADD,  A1 A1 -1 ADDI,  A1 ZERO EQ UNTIL,",
+     "  A2 PUT,  END-CODE", "10 SUMTO ."], "55 ", "BEGIN, UNTIL,")
+asm(["CODE BITS ( n -- the number of 1 bits )",
+     "  A1 0 DSP LW,  A2 ZERO MV,",
+     "  BEGIN,  A1 ZERO NE WHILE,",
+     "    A3 A1 1 ANDI,  A2 A2 A3 ADD,  A1 A1 1 SRLI,",
+     "  REPEAT,  A2 PUT,  END-CODE", "255 BITS . -1 BITS . 0 BITS ."], "8 32 0 ", "WHILE, REPEAT,")
+asm([": CON  CREATE SMUDGE ,  ;CODE  A1 4 W LW,  A1 PUSH,  END-CODE",
+     "1234 CON X", "X . CONTEXT @ CURRENT @ = ."], "1234 1 ", ";CODE ... END-CODE")
+e = copy.deepcopy(ASMED)
+check("an IF, without THEN, is error 20 at END-CODE",
+      say(e, "CODE BAD  A1 ZERO NE IF,  END-CODE"), "END-CODE? MSG # 20 \r\n")
+
 # ---------------------------------------------------------------- cold and warm
 
 e = err([": T 5 ;", "COLD"], "\r\nfig-FORTH RISC-V", "COLD")

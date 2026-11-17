@@ -29,7 +29,8 @@
     13  How this port differs from the classical ones, and why
     14  Behaviour of the model that was kept, odd as it may be
     15  Building, testing, and the assembler
-    16  What is not here
+    16  An assembler in Forth
+    17  What is not here
 
 
  ------------------------------------------------------------------------
@@ -712,8 +713,10 @@
   DOES>, and the code field is pointed at dodoe. When X runs, dodoe
   pushes the address of X's own data and runs that thread.
 
-  ;CODE can be used at the terminal too, but there is no assembler
-  vocabulary: the instructions have to be put in with , as numbers.
+  ;CODE can be used at the terminal too. The kernel has no assembler
+  vocabulary, so the instructions are then put in with , as numbers;
+  or load the one of section 16, which also gives ;CODE what the
+  model's glossary says it does: make ASSEMBLER the CONTEXT.
 
 
  ------------------------------------------------------------------------
@@ -1260,6 +1263,7 @@
       make term       picocom -b 115200 /dev/ttyACM0
       make listing    listings.asm again, from tools/words.py
       make test-board the tests, typed at the real board
+      make put-assembler  the assembler on screens 42-45 (section 16)
 
   The image must sit at address 0: a label is its offset in the image,
   and the threads hold labels as absolute addresses. The CH32V006 maps
@@ -1305,15 +1309,176 @@
 
 
  ------------------------------------------------------------------------
- 16  WHAT IS NOT HERE
+ 16  AN ASSEMBLER IN FORTH
+ ------------------------------------------------------------------------
+
+  The model itself is written with one. Screens 12 to 32 of the
+  Installation Manual are the CODE words in a 6502 assembler made of
+  Forth words:
+
+      CODE LEAVE   XSAVE STX, TSX,  R LDA, R 2+ STA, ...  NEXT JMP,
+
+  "Reverse Polish", the manual says: the operands first, then the
+  instruction, and a word that puts down machine code ends in a comma.
+  The listing of figforth.asm is what the model calls "just a way to get
+  Forth installed"; after that, CODE words are written at the Forth
+  level, in an ASSEMBLER vocabulary. tools/forth-assembler.f is one for
+  RISC-V: four screens, about 3 KiB of dictionary when loaded.
+
+  GETTING IT IN. The file is on the PC, and the Forth cannot read the
+  PC's files. Its source has to be on the disc, as the model says: "The
+  editor is compiled from the terminal the first time, and then used to
+  place the editor and assembler source code on disc." The editor is in
+  the kernel here, so the 64 lines of the file go on the last four
+  screens of the disc, 42 to 45: line 16k+n of the file on line n of
+  screen 42+k. With the editor:
+
+      EDITOR
+      42 CLEAR
+      0 P ( RISC-V ASSEMBLER 1 OF 4: VOCABULARY, REGISTERS, FIELDS )
+      1 P VOCABULARY ASSEMBLER IMMEDIATE   ASSEMBLER DEFINITIONS   HEX
+      ...
+      15 P -->
+      43 CLEAR
+      ...
+      FLUSH
+
+  make put-assembler (tools/put_screens.py) types exactly that, then
+  LISTs the four screens and compares them with the file. It looks
+  first whether the screens are empty, blanks or flash never written,
+  and stops if they are not. This is done once. From then on
+
+      42 LOAD
+
+  brings the assembler back after every cold start or power-on; the
+  --> at the end of each screen goes on to the next. The load says
+  ;CODE MSG # 4 : the new ;CODE hides the kernel's, which is meant.
+  Screens 40 and 41 are the ones make test-board writes over; 42 to 45
+  are not touched by it.
+
+  The lines cannot simply be pasted at the terminal instead: the chip
+  has no input buffer, and a key that arrives while a line is being
+  compiled is lost. Typed by hand they work; the tools type one key
+  every 3 ms and wait for the answer to each line.
+
+  A screen line is 64 characters and nothing ends it: the next line
+  follows at once. So no line of the file is longer than 63, or its
+  last word runs into the first of the next. (The first try at loading
+  it said ;:? , which was a ; at column 63 and a : on the next line.)
+
+  WHAT AN INSTRUCTION LOOKS LIKE. The operands are in the order of the
+  assembly language, then the instruction:
+
+      lw   a1, 0(DSP)            A1 0 DSP LW,
+      sw   a1, 4(DSP)            A1 4 DSP SW,
+      add  a1, a1, a2            A1 A1 A2 ADD,
+      addi DSP, DSP, 4           DSP DSP 4 ADDI,
+      srai a1, a2, 31            A1 A2 1F SRAI,
+      lui  a1, 0x40013           A1 40013 LUI,
+      jalr ra, a1, 8             RA A1 8 JALR,
+      bne  a1, a2, label         A1 A2 addr BNE,
+      jal  ra, label             RA addr JAL,
+
+  A branch or jump takes the address it goes to and works out the
+  distance from HERE. The numbers are in HEX while the screens load;
+  at the terminal they are in whatever BASE is.
+
+  The registers are constants: ZERO RA SP GP TP T0 T1 T2 A0-A5, and
+  the names of this port, W IP DSP RSP UP (section 5). s0 and s1 are
+  there only as DSP and IP, because S0 is the user variable. In HEX,
+  A0 to A5 are also numbers, and the constant wins: write 0A0 for the
+  number A0 hex.
+
+  All of RV32E is there except the system instructions (ecall, fence,
+  csrrw ...): ADD, SUB, SLL, SLT, SLTU, XOR, SRL, SRA, OR, AND,
+  ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI, JALR,
+  LB, LH, LW, LBU, LHU, SB, SH, SW, BEQ, BNE, BLT, BGE, BLTU, BGEU,
+  LUI, AUIPC, JAL, and MV, J, JR, . Every instruction is 4 bytes; there
+  are no compressed ones and no LI, (a large constant is LUI, then
+  ADDI,).
+
+  STRUCTURES, in the place of labels, as in the 6502 assembler:
+
+      rs1 rs2 cond IF,  ...  ELSE,  ...  THEN,
+      BEGIN,  ...  rs1 rs2 cond UNTIL,
+      BEGIN,  ...  rs1 rs2 cond WHILE,  ...  REPEAT,
+      BEGIN,  ...  AGAIN,
+
+  cond is EQ NE LT GE LTU GEU. A1 ZERO EQ IF, means "if a1 = 0". A
+  condition is the branch that jumps over the IF, part, so EQ is BNE.
+  IF, puts down that branch with distance 0 and leaves its address;
+  THEN, works out the distance and puts it in. The addresses are on the
+  stack while you assemble, and CODE and END-CODE look at the stack as
+  : and ; do: an IF, without its THEN, is error 20 at END-CODE.
+
+  THE ENDINGS. NEXT, PUSH, and PUT, are the model's NEXT JMP, PUSH JMP,
+  and PUT JMP, : PUSH, and PUT, take the register that holds the value
+  (a1 in the kernel's words). But they put down the four instructions
+  of NEXT in place, where the model jumps to it: the address of next is
+  in figforth.labels and not known to Forth. That costs 16 bytes a word.
+
+  CODE name ... END-CODE makes a CODE word. ;CODE ... END-CODE ends a
+  defining word in machine code. The assembler's ;CODE is the kernel's
+  with  [COMPILE] ASSEMBLER  in the place of SMUDGE; END-CODE does the
+  SMUDGE, for both. The glossary of the model has no CODE and no
+  END-CODE, so these two are this file's.
+
+      CODE 2*  A1 0 DSP LW,  A1 A1 A1 ADD,  A1 PUT,  END-CODE
+      21 2* .                                                 42
+
+      CODE SUMTO ( n -- 1+2+...+n )  A1 0 DSP LW,  A2 ZERO MV,
+        BEGIN,  A2 A2 A1 ADD,  A1 A1 -1 ADDI,  A1 ZERO EQ UNTIL,
+        A2 PUT,  END-CODE
+      10 SUMTO .                                              55
+
+      CODE BITS ( n -- the number of 1 bits )
+        A1 0 DSP LW,  A2 ZERO MV,
+        BEGIN,  A1 ZERO NE WHILE,
+          A3 A1 1 ANDI,  A2 A2 A3 ADD,  A1 A1 1 SRLI,
+        REPEAT,  A2 PUT,  END-CODE
+      -1 BITS .                                               32
+
+      : CON  CREATE SMUDGE ,  ;CODE  A1 4 W LW,  A1 PUSH,  END-CODE
+      1234 CON X   X .                                        1234
+
+  CON is CONSTANT, and its ;CODE part is docon (section 10): W holds
+  the code field address, so 4 W is the value.
+
+  HOW IT IS MADE. An instruction word is its fixed bits (the opcode,
+  funct3, funct7) with the register and immediate fields ORed in.
+  fig-FORTH has no shift, so a field is moved into place by a multiply:
+  RS1 is  8000 * , 2 to the 15th. Branches and jumps scatter the bits of
+  their distance over the instruction; BOFF and JOFF take each group of
+  bits with AND and multiply or divide it to its place. Because the AND
+  comes first, the numbers are never negative there.
+
+  Each instruction is one line of a defining word:
+
+      : RTYPE  <BUILDS , DOES> @ R, ;
+      7033 RTYPE AND,
+
+  AND, keeps its fixed bits 00007033 and gives them to R, , which takes
+  rd rs1 rs2 from the stack. Six such defining words, one for each
+  format of RISC-V, make all the instructions.
+
+  TESTS. tests/test_listings.py puts the file on screens 42 to 45 of
+  the emulated disc, loads it, compares each instruction with the 32
+  bits bronzebeard makes of it, and runs the words above. On the board
+  they were run after  make put-assembler  and  42 LOAD , with the same
+  answers. The kernel's CODE words run from flash; the ones made with
+  this assembler run from RAM: their code fields hold addresses of
+  2000xxxx hex. The CH32V006 runs code from its SRAM as well.
+
+  FORGET ASSEMBLER gives the dictionary back, and with it every word
+  defined after the load.
+
+
+ ------------------------------------------------------------------------
+ 17  WHAT IS NOT HERE
  ------------------------------------------------------------------------
 
   - The screens of error messages. Type screens 4 and 5 of the manual
     (section 4 has the texts) and say  1 WARNING ! .
-
-  - An ASSEMBLER vocabulary. The model's CODE and ;CODE want one. A
-    RISC-V assembler in Forth would be a project of its own, and a
-    proper one for this system: it would go on screens.
 
   - Saving the dictionary. What you define is in RAM. The fig way to
     keep work is to keep its source on screens and LOAD it.
