@@ -55,8 +55,9 @@
   (picocom) is its terminal, as it would have been in 1979: you switch it
   on, it says  fig-FORTH RISC-V , and everything else is done by typing.
 
-  It is 222 words in the FORTH vocabulary (46 CODE words and 176
-  high-level ones) and 28 in the EDITOR vocabulary.
+  It is 223 words in the FORTH vocabulary (47 CODE words: the model's
+  46 and UPPER; and 176 high-level ones) and 28 in the EDITOR
+  vocabulary.
 
 
  ------------------------------------------------------------------------
@@ -136,7 +137,14 @@
   3  AT THE TERMINAL
  ------------------------------------------------------------------------
 
-  CAPITALS. Every name is in capital letters. dup is not DUP.
+  SMALL LETTERS OR CAPITALS. A name may be typed either way: dup, Dup
+  and DUP are one word. The dictionary keeps names in capitals, as the
+  model does: -FIND turns each word into capitals (the word UPPER)
+  before it looks it up, so : sq dup * ; defines SQ, and an error
+  shows the word in capitals (foo answers FOO? ...). Only names and
+  numbers are changed. The text of ." and the lines given to the
+  editor's P, F and the like are kept as they were typed. This is not
+  the model's: there, dup is not DUP (section 13 E).
 
   OK. A line is read, then interpreted word by word, then the system
   types  OK  and waits for the next. While a definition is open (between
@@ -159,9 +167,10 @@
   FACE is a number unless somebody defines a word FACE.
 
   Numbers are in the base that BASE holds: DECIMAL, HEX, or
-  n BASE ! . A minus sign may come first. Digits above 9 are the capital
-  letters. A point anywhere in a number makes it a double number, two
-  cells, and DPL then holds the count of digits after the point:
+  n BASE ! . A minus sign may come first. Digits above 9 are the
+  letters, small or capital: in HEX, ff and FF are both 255. A point
+  anywhere in a number makes it a double number, two cells, and DPL
+  then holds the count of digits after the point:
 
       1.5 D. 15 OK
       DPL @ . 1 OK
@@ -230,9 +239,9 @@
   A session:
 
       6 OK                    6 is on the stack
-      dup dup?                not found; the 6 is gone; 3 and 0 are there
+      foo FOO?                not found; the 6 is gone; 3 and 0 are there
       . 0 OK                  BLK: the error was at the terminal
-      . 3 OK                  IN: just after  dup
+      . 3 OK                  IN: just after  foo
       . 32 .? EMPTY STACK     the stack was empty
 
   The two numbers are for WHERE ( in blk -- ), a word of the editor
@@ -522,12 +531,12 @@
                 |                                      |
       00004000  +--------------------------------------+  <- LO
                 |  not used (about 3 KiB)              |
-      000032E4  +--------------------------------------+
+      0000332C  +--------------------------------------+
                 |  listings.asm: the high-level words, |
                 |  the disc words, the editor          |
-      00000AC8  +- - - - - - - - - - - - - - - - - - - +
+      00000B08  +- - - - - - - - - - - - - - - - - - - +
                 |  figforth.asm: the nucleus,          |
-                |  46 CODE words, the cold start       |
+                |  47 CODE words, the cold start       |
       0000031C  +- - - - - - - - - - - - - - - - - - - +
                 |  the origin table                    |
       000002E0  +- - - - - - - - - - - - - - - - - - - +  <- 0 +ORIGIN
@@ -656,8 +665,10 @@
               ENDIF
           AGAIN ;
 
-  -FIND takes the next word of the input (BL WORD) and searches CONTEXT,
-  then CURRENT. Found: the parameter field, the length byte, and true.
+  -FIND takes the next word of the input (BL WORD), turns it into
+  capitals (HERE UPPER, not the model's), and searches CONTEXT, then
+  CURRENT. Found: the parameter field, the length byte, and true.
+  NUMBER reads the same word at HERE, so it gets capitals too.
 
   STATE @ <  is the whole decision between compiling and executing, in
   one comparison. STATE is 0 when executing and C0 hex when compiling.
@@ -1147,8 +1158,9 @@
 
      - Name fields are padded with blanks to a cell (section 6).
      - CREATE rounds the dictionary pointer up before and after the name.
-       The word that does it, ALIGN, is THE ONE WORD ADDED TO THE MODEL.
-       You want it yourself after C, or an odd ALLOT.
+       The word that does it, ALIGN, is one of the TWO WORDS ADDED TO
+       THE MODEL (the other is UPPER, E below). You want it yourself
+       after C, or an odd ALLOT.
      - The text behind (.") is padded, and (.") rounds the return
        address up over it. ." rounds DP up after compiling a text.
      - EXPECT ends a line with  0 I 1+ ! , a cell stored at any address.
@@ -1210,6 +1222,15 @@
        own; the model's says FORTH-65.
      - MON, the jump to the 6502 monitor, is not here: there is no
        monitor.
+     - Small letters. The one difference the chip does not force: it is
+       for the person at the keyboard, who should not have to keep caps
+       lock on. UPPER ( addr -- ), a CODE word, turns the small letters
+       of a counted text into capitals; -FIND does  HERE UPPER  after
+       BL WORD. Names, and the numbers INTERPRET gives to NUMBER, are
+       then capitals whichever way they were typed. WORD itself is the
+       model's, so ." and the editor keep small letters. It costs 72
+       bytes of flash, and a few microseconds for each word read; a word
+       once compiled runs as fast as before.
 
   What did NOT change is the more important list. The dictionary
   structure, the search, the two-state compiler with its security, the

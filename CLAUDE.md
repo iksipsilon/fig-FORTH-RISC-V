@@ -20,6 +20,7 @@
      7  Interrupts: what is known, what is open
      8  Timing of high-level Forth
      9  Small things left over
+    10  Small letters (UPPER in -FIND)
 
 
  ------------------------------------------------------------------------
@@ -110,8 +111,8 @@
   board): file shape (64 lines, <= 63 chars, --> ends screens 1-3),
   42 LOAD from the emulated disc, 41 instructions compared with
   bronzebeard bit for bit (CASES list; a temporary .asm with labels
-  L0..Ln), and the manual's examples. make test: 283 + 403 checks, all
-  passing at the time of writing.
+  L0..Ln), and the manual's examples. make test: 413 + 294 checks
+  (nucleus + listings), all passing since UPPER (section 10).
 
 
  ------------------------------------------------------------------------
@@ -141,7 +142,8 @@
 
   - In HEX, the register constants A0-A5 hide the numbers A0-A5 hex
     (the dictionary is searched before NUMBER). Write 0A0 for the
-    number. This broke two of my own test cases at first.
+    number. This broke two of my own test cases at first. Since UPPER
+    (section 10) the same holds for a0-a5 in small letters.
 
   - A line typed while compiling (inside : ... ) answers only CR LF,
     no OK. A test that waits for OK must allow that.
@@ -183,8 +185,9 @@
     repeat it: minichlink -b, read the banner, type 42 LOAD (wait ~1 s),
     then the example lines from MANUAL.txt section 16.
 
-  - Sizes: image 13028 bytes, must stay below 16384 (the disc starts at
-    4000 hex), so about 3.3 KiB of kernel space is left. RAM 8 KiB.
+  - Sizes: image 13100 bytes (13028 before UPPER), must stay below
+    16384 (the disc starts at 4000 hex), so about 3.2 KiB of kernel
+    space is left. RAM 8 KiB.
     HERE after a cold start + 42 LOAD: 20000BBC hex.
 
 
@@ -212,7 +215,7 @@
 
   The assembler in the kernel, like the editor: possible but advised
   against for now. It would save its 2.9 KiB of RAM, but take nearly
-  all of the ~3.3 KiB of kernel space left, and needs a third
+  all of the ~3.2 KiB of kernel space left, and needs a third
   vocabulary body (the same work MANUAL section 12 lists for SF:
   figforth.asm voc body, voc_up, COLD copies more cells, VOC-LINK;
   listing.py must learn a third vocabulary).
@@ -361,3 +364,37 @@
 
   - This file was docs/CLAUDE.txt first; the user had it moved here as
     CLAUDE.md so that it is read automatically.
+
+
+ ------------------------------------------------------------------------
+  10  SMALL LETTERS (UPPER IN -FIND)
+ ------------------------------------------------------------------------
+
+  Done 2026-11-17, at the user's request: they did not want to keep
+  switching caps lock. It is the one deviation the chip does not force;
+  the user chose it knowing that (I asked first, and gave the cost).
+
+  - UPPER ( addr -- ), a CODE word in figforth.asm right after (FIND)
+    (ENCLOSE now links to it): small letters a-z of a counted text to
+    capitals. -FIND is  BL WORD HERE UPPER HERE CONTEXT @ @ (FIND) ...
+    tools/listing.py's LAB table knows UPPER.
+  - Why -FIND and not KEY/EXPECT/WORD: every name goes through -FIND
+    (INTERPRET, CREATE and so : CONSTANT VARIABLE VOCABULARY, ' ,
+    [COMPILE], FORGET), and NUMBER reads the same word at HERE, so hex
+    digits work too. ." and the editor's P F etc. read with WORD and
+    keep small letters. Folding at KEY was rejected: it would make
+    small letters impossible to type at all.
+  - Consequences: names are stored in capitals (: sq ... shows SQ in
+    VLIST); an error echoes the word in capitals (foo gives FOO? ...).
+  - Cost: 72 bytes of flash (64 for UPPER, 8 in -FIND). Speed counted
+    from the source, not measured: about 8 instructions a character,
+    60-80 a word, against a (FIND) of up to ~6000; 3-7 us a word at 24
+    MHz; nothing at all for compiled code.
+  - Tests: test_nucleus.py has UPPER's own checks (all 26 letters, the
+    neighbours ` { @ [, bytes above 7F, the length, an odd address);
+    test_listings.py the small-letter lines after "the prompt" (these
+    are also typed at the board by make test-board).
+  - The board must be reflashed (make flash) to get it. minichlink
+    writes the image only (13100 bytes, below 4000 hex), so the disc,
+    screens 4, 5 and 42-45, should survive: check with 4 LIST and
+    42 LIST after the first flash with UPPER.

@@ -153,8 +153,8 @@ def walk(image, nfa):
     return words
 
 WORDS = walk(IMAGE, L["last_nfa"])
-check("the words after the nucleus, oldest first", [w[0] for w in reversed(WORDS)][46:], NAMES)
-check("the nucleus is under them", len(WORDS), 46 + len(NAMES))
+check("the words after the nucleus, oldest first", [w[0] for w in reversed(WORDS)][47:], NAMES)
+check("the nucleus is under them", len(WORDS), 47 + len(NAMES))
 IMMEDIATE = {":", ";", "[", ";CODE", '."', "\0", "[COMPILE]", "LITERAL", "DLITERAL", "FORTH", "(",
              "'", "BEGIN", "ENDIF", "THEN", "DO", "LOOP", "+LOOP", "UNTIL", "END", "AGAIN",
              "REPEAT", "IF", "ELSE", "WHILE", "-->", "EDITOR"}
@@ -170,7 +170,20 @@ check("cold start", bytes(BOOTED.uart_out), b"\r\nfig-FORTH RISC-V\r\n")
 t("", "", "an empty line")
 t("1 2 + .", "3 ")
 err("FOO", "FOO? ")
-err("dup", "dup? ", "lower case is not upper case")
+err("foo", "FOO? ", "the word of an error is shown in capitals")
+
+# small letters: -FIND turns a word into capitals before it looks it up
+t("1 dup + .", "2 ", "a name in small letters")
+t("3 Dup + .", "6 ", "a name in mixed letters")
+t([": sq dup * ;", "7 sq . 8 SQ . 9 Sq ."], "49 64 81 ", "a word defined in small letters")
+t([": sq dup * ;", "LATEST ID."], "SQ ", "the name is kept in capitals")
+t("hex ff . decimal", "FF ", "hex digits in small letters")
+t("hex 0a0 1+ . decimal", "A1 ")
+t('." Hello, world"', "Hello, world", "text after .\" keeps its letters")
+t([': hi ." Mixed Case" ;', "hi"], "Mixed Case", "and so does text compiled by .\"")
+t("5 variable v v @ . 6 v ! V @ .", "5 6 ")
+t("' dup ' DUP = .", "1 ", "' finds the word in either case")
+t([": twice dup + ;", "forget twice", "1 2 + ."], "3 ", "FORGET in small letters")
 t(["1 2 FOO", ". . SP@ S0 @ = ."], "0 7 1 ",
   "an error empties the stack, then leaves IN and BLK on it")
 t("( A COMMENT ) 5 .", "5 ")

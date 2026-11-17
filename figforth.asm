@@ -394,6 +394,35 @@ pfind5:
     li a1, 0                    # the end of the dictionary: false
     j push
 
+# UPPER  ( addr -- )  turn the small letters a to z of the text at addr (a
+# length byte, then the characters) into capitals. NOT IN THE MODEL, and not
+# forced by the chip: it is here so that names may be typed in either case.
+# -FIND does UPPER on the word that WORD left at HERE, before (FIND) sees it.
+# So DUP dup and Dup are one word, names are kept in capitals, and NUMBER gets
+# the capital digits it wants (ff is FF). Text read by WORD for anything else
+# (." , the editor's lines) stays as it was typed.
+align 4
+n_upper:
+    db 0x85
+    string UPPER
+    bytes 0x20 0xA0
+    dw n_pfind
+upper:
+    dw upper + CELL
+    lw a1, 0(DSP)               # a1 = the text
+    lbu a2, 0(a1)               # a2 = characters left
+    li a5, 26
+upper1:
+    beqz a2, pop                # done: drop addr
+    addi a1, a1, 1
+    addi a2, a2, -1
+    lbu a3, 0(a1)
+    addi a4, a3, -97            # less 'a'
+    bgeu a4, a5, upper1         # not a to z
+    addi a3, a3, -32            # 'a' becomes 'A'
+    sb a3, 0(a1)
+    j upper1
+
 
 # ---------------------------------------------------------------- SCR 20
 
@@ -406,7 +435,7 @@ n_encl:
     db 0x87
     string ENCLOS
     db 0xC5                 # E + 0x80
-    dw n_pfind
+    dw n_upper
 encl:
     dw encl + CELL
     lw a2, 0(DSP)               # the delimiter

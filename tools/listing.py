@@ -40,7 +40,7 @@ from header import header, PLAIN
 # Forth name -> label of the code field: the nucleus
 LAB = {"LIT": "lit", "EXECUTE": "exec", "BRANCH": "bran", "0BRANCH": "zbran",
        "(LOOP)": "xloop", "(+LOOP)": "xploo", "(DO)": "xdo", "I": "ido", "DIGIT": "digit",
-       "(FIND)": "pfind", "ENCLOSE": "encl", "EMIT": "emit", "KEY": "key",
+       "(FIND)": "pfind", "UPPER": "upper", "ENCLOSE": "encl", "EMIT": "emit", "KEY": "key",
        "?TERMINAL": "qterm", "CR": "cr", "CMOVE": "cmove", "U*": "ustar", "U/": "uslas",
        "AND": "andd", "OR": "orr", "XOR": "xorr", "SP@": "spat", "SP!": "spsto",
        "RP!": "rpsto", ";S": "semis", "LEAVE": "leave", ">R": "tor", "R>": "fromr",

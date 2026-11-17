@@ -5,7 +5,8 @@ written for the [bronzebeard](https://github.com/theandrew168/bronzebeard)
 assembler. The first target is the WCH CH32V006 (RV32EC, 62 KiB flash,
 8 KiB RAM).
 
-**What is here: the model, with its editor.** The 46 CODE words (the nucleus),
+**What is here: the model, with its editor.** The 46 CODE words (the nucleus,
+with one more, `UPPER`, so that names may be typed in small letters),
 176 high-level words in `FORTH` (the text interpreter, the compiler, the
 defining words, vocabularies, number input and output, `FORGET`, `VLIST`, and
 the disc: `BLOCK` `BUFFER` `UPDATE` `LOAD` `-->` `LIST` `INDEX` `TRIAD`) and the
@@ -17,11 +18,12 @@ the disc: `BLOCK` `BUFFER` `UPDATE` `LOAD` `-->` `LIST` `INDEX` `TRIAD`) and the
     7 SQ . 49 OK
     FOO FOO? MSG # 0
 
-Names are in capitals, as then. An error is a number (the list is in the
-Installation Manual): 0 not found, 1 empty stack, 4 not unique, 6 disc range,
-8 disc error, 17 compilation only, 18 execution only, 19 conditionals not
-paired, 20 definition not finished, 21 in protected dictionary, 24 declare
-vocabulary. After an error two numbers are on the stack, `IN` and `BLK`.
+Names are kept in capitals, as then, but may be typed in small letters
+(`dup` is `DUP`): the one change that is not the model's and not the chip's.
+An error is a number (the list is in the Installation Manual): 0 not found,
+1 empty stack, 4 not unique, 6 disc range, 8 disc error, 17 compilation only,
+18 execution only, 19 conditionals not paired, 20 definition not finished,
+21 in protected dictionary, 24 declare vocabulary. After an error two numbers are on the stack, `IN` and `BLK`.
 
 New words go into RAM (about 6.5 KiB) and are gone at power-off. What is
 written to the disc stays.
@@ -87,8 +89,8 @@ editor have run in the emulator only.
 ## Build, test, flash
 
     pip install bronzebeard
-    make            # figforth.bin, 13028 bytes, and figforth.labels
-    make test       # 403 checks of the nucleus, 211 of the listings
+    make            # figforth.bin, 13100 bytes, and figforth.labels
+    make test       # 413 checks of the nucleus, 294 of the listings
     make flash      # minichlink -w figforth.bin flash -b
     make term       # picocom -b 115200 /dev/ttyACM0
 

@@ -220,8 +220,10 @@ check("the handler is on a cell boundary", L["trap"] % 4, 0)
 
 # ---------------------------------------------------------------- headers
 
+# The model's CODE words, and UPPER, which is not the model's (so that names
+# may be typed in small letters).
 MODEL = ["LIT", "EXECUTE", "BRANCH", "0BRANCH", "(LOOP)", "(+LOOP)", "(DO)", "I",
-         "DIGIT", "(FIND)", "ENCLOSE", "EMIT", "KEY", "?TERMINAL", "CR", "CMOVE",
+         "DIGIT", "(FIND)", "UPPER", "ENCLOSE", "EMIT", "KEY", "?TERMINAL", "CR", "CMOVE",
          "U*", "U/", "AND", "OR", "XOR", "SP@", "SP!", "RP!", ";S", "LEAVE", ">R",
          "R>", "R", "0=", "0<", "+", "D+", "MINUS", "DMINUS", "OVER", "DROP", "SWAP",
          "DUP", "+!", "TOGGLE", "@", "C@", "!", "C!", "S->D"]
@@ -325,6 +327,25 @@ def two(e):
 check("(FIND) finds the newer word of two with one name", find("TWIN", NEW + 0x40, two)[0],
       NEW + 0x40 + 8 + 2 * CELL)
 check("(FIND) with a link of 0", find("QQ", NEW, lambda e: ram_word(e, NEW, "ZZ", 0)), [0])
+
+# UPPER  ( addr -- )  small letters of the counted text at addr into capitals
+
+def upper(raw):
+    ds, rs, out, e = run(["UPPER"], [DATA], setup=lambda e: pokes(e, DATA, raw))
+    return ds, bytes(e.ram[DATA - RAM:DATA - RAM + len(raw)])
+
+check("UPPER", upper(text("dup", 8)), ([], text("DUP", 8)))
+check("UPPER all 26, and capitals stay", upper(text("abcdefghijklmnopqrstuvwxyzAZ", 32)),
+      ([], text("ABCDEFGHIJKLMNOPQRSTUVWXYZAZ", 32)))
+check("UPPER leaves the neighbours of a to z: ` { @ [ 0 9 + -",
+      upper(text("`{@[09+-", 12)), ([], text("`{@[09+-", 12)))
+check("UPPER leaves bytes above 7F", upper(bytes([3, 0xE1, 0xFF, 0x80, 0x61])),
+      ([], bytes([3, 0xE1, 0xFF, 0x80, 0x61])))
+check("UPPER stops at the length", upper(bytes([2]) + b"abc d"), ([], bytes([2]) + b"ABc d"))
+check("UPPER of no characters", upper(bytes([0]) + b"ab"), ([], bytes([0]) + b"ab"))
+check("UPPER on an odd address",
+      run(["UPPER"], [DATA + 1], setup=lambda e: pokes(e, DATA, b"x" + text("ok", 7)))[3]
+      .ram[DATA - RAM:DATA - RAM + 8], bytearray(b"x" + text("OK", 7)))
 
 # ---------------------------------------------------------------- SCR 20
 

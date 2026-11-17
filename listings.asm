@@ -1681,8 +1681,10 @@ numb2:
 numb3:
     dw semis
 
-# -FIND  ( -- pfa b 1 | 0 )  look the next word of the input up in CONTEXT, then CURRENT
-#   : -FIND  BL WORD HERE CONTEXT @ @ (FIND)
+# -FIND  ( -- pfa b 1 | 0 )  look the next word of the input up in CONTEXT, then CURRENT.
+#        HERE UPPER is not the model's: it turns the word into capitals, so
+#        that names may be typed in small letters (see UPPER in figforth.asm).
+#   : -FIND  BL WORD HERE UPPER HERE CONTEXT @ @ (FIND)
 #            DUP 0= IF DROP HERE LATEST (FIND) THEN ;
 align 4
 n_dfind:
@@ -1694,6 +1696,8 @@ dfind:
     dw docol
     dw bl
     dw wordd
+    dw here
+    dw upper
     dw here
     dw cont
     dw at

@@ -220,8 +220,8 @@ colon("NUMBER", "numb", "( addr -- d )  the text at addr + 1 as a double number;
 BEGIN DPL ! (NUMBER) DUP C@ BL - WHILE
 DUP C@ 46 - 0 ?ERROR 0 REPEAT
 DROP R> IF DMINUS THEN""")
-colon("-FIND", "dfind", "( -- pfa b 1 | 0 )  look the next word of the input up in CONTEXT, then CURRENT", """
-BL WORD HERE CONTEXT @ @ (FIND)
+colon("-FIND", "dfind", "( -- pfa b 1 | 0 )  look the next word of the input up in CONTEXT, then CURRENT.\n#        HERE UPPER is not the model's: it turns the word into capitals, so\n#        that names may be typed in small letters (see UPPER in figforth.asm).", """
+BL WORD HERE UPPER HERE CONTEXT @ @ (FIND)
 DUP 0= IF DROP HERE LATEST (FIND) THEN""")
 
 section("ERRORS, ID.")
