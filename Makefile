@@ -4,13 +4,25 @@
 #   make test     assemble, then run every word in the emulator, and type at it
 #   make flash    program the chip through a WCH-LinkE and restart it
 #   make term     the console: 115200 baud, Enter sends CR, Ctrl-A Ctrl-X quits
+#   make listing  write listings.asm again from tools/words.py
+#   make test-board   type the tests at the real board (quit the console
+#                 first; screens 40 and 41 of the disc are written over)
 
 TERMINAL ?= /dev/ttyACM0
 
 figforth.bin: figforth.asm listings.asm board.asm
 	bronzebeard -i . -l figforth.labels -o figforth.bin figforth.asm
 
-.PHONY: test flash term clean
+listings.asm: tools/words.py tools/listing.py tools/header.py
+	python3 tools/listing.py
+
+.PHONY: test flash term clean listing test-board
+
+listing:
+	python3 tools/listing.py
+
+test-board: figforth.bin
+	python3 tools/board_test.py $(TERMINAL)
 
 test:
 	python3 tests/test_nucleus.py

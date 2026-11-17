@@ -71,10 +71,13 @@ editor have run in the emulator only.
 |---|---|
 | `MANUAL.txt` | how it works and why: the dictionary, the memory map, errors, the disc, the differences from the model |
 | `figforth.asm` | the nucleus: the CODE words, in the order of the model's screens, and the cold start |
-| `listings.asm` | the high-level words: colon definitions written out as threads, with the code behind `;CODE` |
+| `listings.asm` | the high-level words: colon definitions written out as threads, with the code behind `;CODE`. Written by `tools/listing.py`; do not edit |
 | `board.asm` | the chip (CH32V006): vector table, clock, console UART, trap handler, flash page writer |
 | `docs/fig-FORTH_Installation_Manual.pdf` | the model: its screens are what `listings.asm` was written from |
-| `tools/header.py` | prints the header of a word, to paste into the source |
+| `tools/words.py` | every high-level word as its Forth definition: the source of `listings.asm` |
+| `tools/listing.py` | writes `listings.asm` from it (`make listing`) |
+| `tools/header.py` | prints the header of a word; `listing.py` uses it |
+| `tools/board_test.py` | types the tests at the real board (`make test-board`); writes over screens 40 and 41 |
 | `tests/test_nucleus.py` | assembles the image and runs every word of the nucleus in the emulator |
 | `tests/test_listings.py` | starts the image in the emulator and types lines at it |
 | `tests/rv32emu.py` | the RV32EC emulator of the sixforths repository, unchanged |
@@ -180,8 +183,8 @@ Found while writing this; each was tried.
 - **No macros.** Every header is written out. `python3 tools/header.py NAME
   label previous [code-field]` prints one. The test walks the dictionary and
   checks every header.
-- **`last_nfa:`** stands on the name field of the newest word (in
-  `listings.asm`). Move that line when a word is added at the end.
+- **`last_nfa:`** and **`last_enfa:`** stand on the name fields of the newest
+  words of `FORTH` and `EDITOR`; `tools/listing.py` puts them there.
 - **`call` beyond 2 KiB is wrong.** bronzebeard makes it one `jal` and keeps
   only the low 12 bits of the distance. Write `jal ra, label`.
 - **`string` and `#`.** A name or a text with `#` `"` `'` or `,` in it is written

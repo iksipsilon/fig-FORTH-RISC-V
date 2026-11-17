@@ -1,5 +1,8 @@
 # fig-FORTH for RISC-V: the listings
 #
+# THIS FILE IS WRITTEN BY tools/listing.py FROM tools/words.py (make listing).
+# Change a word there, not here.
+#
 # The high-level words of the fig-FORTH model (fig-FORTH Installation Manual,
 # Release 1), as the assembly listings of the Forth Interest Group gave them:
 # every colon definition written out as its thread, one code field address
@@ -24,9 +27,9 @@
 #
 # The disc is the flash above the kernel; see THE DISC below.
 #
-# A word is its header (python3 tools/header.py NAME label previous docol),
-# then the thread. `last_nfa:` stands on the name field of the newest word:
-# move that line when a word is added at the end.
+# A word is its header (tools/header.py makes it), then the thread.
+# `last_nfa:` and `last_enfa:` stand on the name fields of the newest words
+# of FORTH and of EDITOR.
 
 # ------------------------------------------------------------------------
 # COLON AND SEMICOLON, CONSTANT VARIABLE USER

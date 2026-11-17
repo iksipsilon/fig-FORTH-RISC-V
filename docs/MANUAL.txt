@@ -94,9 +94,10 @@
           dw semis
 
   That is what listings.asm is. Above every thread is its Forth
-  definition as a comment. (The 4400 lines were not typed by hand: a
-  script turned each definition into its thread. The script is not in the
-  repository; listings.asm is the source.)
+  definition as a comment. The 4400 lines are not typed by hand:
+  tools/words.py holds each word as its Forth definition, and
+  tools/listing.py turns each into its header and thread and writes
+  listings.asm (make listing). To add or change a word, change words.py.
 
   Two files, on purpose. figforth.asm is the nucleus, the machine code.
   listings.asm is the high-level part. board.asm is the chip: the vector
@@ -1045,6 +1046,8 @@
       make test       the emulator tests
       make flash      minichlink -w figforth.bin flash -b
       make term       picocom -b 115200 /dev/ttyACM0
+      make listing    listings.asm again, from tools/words.py
+      make test-board the tests, typed at the real board
 
   The image must sit at address 0: a label is its offset in the image,
   and the threads hold labels as absolute addresses. The CH32V006 maps
@@ -1062,10 +1065,12 @@
                                as at the terminal; puts screens on the
                                disc; edits; pulls the power
 
-  The lines of test_listings.py have also been typed at the real board
-  over the serial port, and the board's flash read back before and after
-  with minichlink -r, to see that the kernel was untouched and only the
-  screens used by the test had changed.
+  tools/board_test.py (make test-board) types the lines of
+  test_listings.py at the real board over the serial port, then writes a
+  screen with the editor, resets the chip and looks whether the screen is
+  still there. It uses screens 40 and 41. The first time, the board's
+  whole flash was also read back before and after with minichlink -r, to
+  see that the kernel was untouched and only those screens had changed.
 
   BRONZEBEARD is a small assembler written in Python. What it taught us:
 
@@ -1084,8 +1089,7 @@
   - A CSR number above 7FF is written as the number minus 1000 hex.
 
   last_nfa: and last_enfa: stand on the name fields of the newest words
-  of FORTH and EDITOR. If a word is added at the end of either, its
-  label moves there.
+  of FORTH and EDITOR. tools/listing.py puts them there.
 
 
  ------------------------------------------------------------------------
