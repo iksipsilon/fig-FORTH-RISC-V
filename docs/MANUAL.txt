@@ -1,0 +1,1118 @@
+
+                          fig-FORTH for RISC-V
+
+                       on the WCH CH32V006 (RV32EC)
+
+                 what was done, why, and how it behaves
+
+
+  This is a companion to three things: the fig-FORTH Installation Manual
+  (the PDF in docs/, called "the model" below), the source files
+  figforth.asm, listings.asm and board.asm, and the README. The README says
+  what is here in one page. This file says how it works and why it is the
+  way it is.
+
+  CONTENTS
+
+     1  What this is
+     2  How it came about
+     3  At the terminal
+     4  Errors
+     5  The inner interpreter
+     6  A word in the dictionary
+     7  Vocabularies
+     8  The memory map
+     9  The text interpreter and the compiler
+    10  The defining words
+    11  The disc
+    12  The editor
+    13  How this port differs from the classical ones, and why
+    14  Behaviour of the model that was kept, odd as it may be
+    15  Building, testing, and the assembler
+    16  What is not here
+
+
+ ------------------------------------------------------------------------
+  1  WHAT THIS IS
+ ------------------------------------------------------------------------
+
+  fig-FORTH is the Forth that the Forth Interest Group published in 1979
+  as a "model": a complete system written in Forth itself, printed screen
+  by screen in the Installation Manual, together with assembly listings
+  for the processors of the day (6502, 8080, 6800, PDP-11 and others).
+  It is in the public domain.
+
+  This is that model for a 32-bit RISC-V microcontroller, the CH32V006:
+
+      processor   QingKe V2C, RV32EC (16 registers, no multiply used)
+      flash       62 KiB    the kernel in the first 13 KiB, the "disc"
+                            from 16 KiB up
+      RAM         8 KiB
+      console     USART1 at 115200 baud, through a WCH-LinkE
+
+  The idea is that the chip is the computer and a serial terminal
+  (picocom) is its terminal, as it would have been in 1979: you switch it
+  on, it says  fig-FORTH RISC-V , and everything else is done by typing.
+
+  It is 222 words in the FORTH vocabulary (46 CODE words and 176
+  high-level ones) and 28 in the EDITOR vocabulary.
+
+
+ ------------------------------------------------------------------------
+  2  HOW IT CAME ABOUT
+ ------------------------------------------------------------------------
+
+  The order in which things were done, and the reason for each step.
+
+  The nucleus first. The 46 CODE words of the model (LIT, EXECUTE,
+  BRANCH, (DO), (FIND), ENCLOSE, EMIT, KEY, U*, U/, the stack words ...)
+  were written in RISC-V assembly for the bronzebeard assembler, in the
+  order of the model's screens 12 to 32. With them came the cold start
+  and a stand-in for ABORT that printed a line and echoed the keys: that
+  was enough to see the inner interpreter run on the chip.
+
+  Then the listing. In 1979 nobody typed fig-FORTH in as Forth. You
+  bought the assembly listing for your processor and typed that into your
+  assembler. In the listing the high-level words are not Forth text: each
+  colon definition is written out as its thread, a list of addresses.
+  The model's
+
+      : QUERY  TIB @ 50 EXPECT 0 IN ! ;
+
+  is in the listing as
+
+      query:
+          dw docol
+          dw tib
+          dw at
+          dw lit
+          dw 80
+          dw expec
+          dw zero
+          dw inn
+          dw store
+          dw semis
+
+  That is what listings.asm is. Above every thread is its Forth
+  definition as a comment. (The 4400 lines were not typed by hand: a
+  script turned each definition into its thread. The script is not in the
+  repository; listings.asm is the source.)
+
+  Two files, on purpose. figforth.asm is the nucleus, the machine code.
+  listings.asm is the high-level part. board.asm is the chip: the vector
+  table, the clock, the serial port, the trap handler and the routine
+  that writes a page of flash. A port to another board is a new board.asm.
+
+  True to the model. The first version of the listing had conveniences:
+  a < that could not overflow, an added U<, an ERROR that left the stack
+  empty, defining words that fetched the address of their run-time code.
+  They were all taken out again. The rule since then: every word is the
+  model's, definition for definition, unless the hardware forces a
+  change, and then the comment above the word says why. Section 13 lists
+  every change.
+
+  The listing was first written from memory. When the Installation
+  Manual was added to the repository, every high-level screen (33 to 62
+  and 72 to 78) was compared with it. They agreed.
+
+  On the chip. After each stage the image was flashed and the same lines
+  that the emulator tests type were typed at the real board over the
+  serial port. The whole flash was read back before and after the disc
+  tests to see that only the test screens had changed.
+
+  The disc. The model keeps its source on disc and the chip has none.
+  The manual itself has the answer: a section "RAM DISC SIMULATION" with
+  an R/W that keeps the blocks in memory, for a system without a drive.
+  Here the memory is the free flash.
+
+  The editor. The sample editor of the manual, screens 87 to 97. Its
+  last screen makes the editor a permanent part of the system, so it was
+  put where a permanent part goes: into the kernel.
+
+
+ ------------------------------------------------------------------------
+  3  AT THE TERMINAL
+ ------------------------------------------------------------------------
+
+  CAPITALS. Every name is in capital letters. dup is not DUP.
+
+  OK. A line is read, then interpreted word by word, then the system
+  types  OK  and waits for the next. While a definition is open (between
+  : and ;) there is no OK: the line was compiled, not executed, and a
+  definition may run over as many lines as it needs.
+
+      fig-FORTH RISC-V
+      1 2 + . 3 OK
+      : SQ DUP * ; OK
+      7 SQ . 49 OK
+
+  The line. Up to 80 characters. Enter ends it and is echoed as a blank.
+  The 80th character ends it without Enter. The backspace key (the one
+  that sends 7F hex; picocom's default) takes the last character back:
+  the cursor moves left, but the character stays on the screen until it
+  is typed over. Backspace at the start of the line rings the bell.
+
+  Words are separated by blanks. A word is first looked up in the
+  dictionary; only if it is not found is it tried as a number. So in HEX,
+  FACE is a number unless somebody defines a word FACE.
+
+  Numbers are in the base that BASE holds: DECIMAL, HEX, or
+  n BASE ! . A minus sign may come first. Digits above 9 are the capital
+  letters. A point anywhere in a number makes it a double number, two
+  cells, and DPL then holds the count of digits after the point:
+
+      1.5 D. 15 OK
+      DPL @ . 1 OK
+
+  The cell is 32 bits. A double number is 64 bits, its high cell on top
+  of the stack.
+
+  True is 1 and false is 0, as in the model (not -1 as in later Forths).
+
+  Arithmetic. / and MOD round toward zero, and the remainder has the sign
+  of the dividend:  -7 2 /  is -3 and  -7 2 MOD  is -1. Dividing by zero
+  does not stop anything: the quotient is -1. * keeps the low 32 bits.
+  */ keeps a 64-bit product in between.
+
+  Loops. DO ... LOOP always runs at least once. I is the index. LEAVE
+  does not jump out: it makes the loop end when it next reaches LOOP.
+
+  The stack. 56 numbers fit. One more and the next word answers
+  MSG # 7  (full stack). A word used on an empty stack gets whatever
+  lies above the stack, and then  MSG # 1 :
+
+      . 32 .? MSG # 1
+
+  The 32 is not an answer. See section 14.
+
+  New words are compiled into RAM and are gone when the power goes, or
+  at COLD. What is on the disc stays.
+
+  A warm start keeps the new words and puts the stacks, the base and the
+  terminal back in order. There is no word for it; it is the second
+  entry of the origin table:
+
+      4 +ORIGIN PAD ! PAD EXECUTE
+
+
+ ------------------------------------------------------------------------
+  4  ERRORS
+ ------------------------------------------------------------------------
+
+  All errors go through one word, ERROR ( n -- ), and it is worth knowing
+  exactly what it does, because it explains what you see:
+
+      : ERROR  WARNING @ 0< IF (ABORT) ENDIF
+               HERE COUNT TYPE ." ? " MESSAGE
+               SP! IN @ BLK @ QUIT ;
+
+  1. If WARNING is negative it runs (ABORT), which is ABORT: a complete
+     restart of the interpreter. Otherwise:
+
+  2. It types the word at HERE, which is the last word the interpreter
+     read, so usually the word that failed, and a question mark.
+
+  3. MESSAGE types the message: with WARNING 0 its number, as
+     MSG # 17 ; with WARNING 1 line n of screen 4 of the disc.
+
+  4. SP! empties the data stack. Whatever was on it is gone.
+
+  5. IN @ and BLK @ are pushed. So AFTER EVERY ERROR THERE ARE TWO
+     NUMBERS ON THE STACK: where the interpreter was in the text (IN,
+     an offset in characters), and on top of it the block it was reading
+     (BLK; 0 means the terminal).
+
+  6. QUIT: the return stack is emptied, compiling stops, input comes
+     from the terminal again. No OK is typed.
+
+  A session:
+
+      6 OK                    6 is on the stack
+      dup dup? MSG # 0        not found; the 6 is gone; 3 and 0 are there
+      . 0 OK                  BLK: the error was at the terminal
+      . 3 OK                  IN: just after  dup
+      . 32 .? MSG # 1         the stack was empty
+
+  The two numbers are for WHERE ( in blk -- ), a word of the editor
+  screens: after an error while a screen was being loaded, WHERE shows
+  the screen and the line and marks the place. At the terminal they are
+  only in the way; DROP DROP or the next error removes them.
+
+  An error inside a definition leaves the compiler (QUIT does that) but
+  not the half-made word: its header stays in the dictionary, hidden
+  (see "smudge" in section 6), and takes its room until a FORGET or COLD.
+
+  The messages. With WARNING 0, which is how the system starts:
+
+       0   (the word is not known, and is not a number)
+       1   EMPTY STACK
+       2   DICTIONARY FULL
+       4   ISN'T UNIQUE          a warning, not an error: the word is made
+       6   DISC RANGE ?
+       7   FULL STACK
+       8   DISC ERROR            the flash did not take the block
+      17   COMPILATION ONLY, USE IN DEFINITION
+      18   EXECUTION ONLY
+      19   CONDITIONALS NOT PAIRED
+      20   DEFINITION NOT FINISHED
+      21   IN PROTECTED DICTIONARY
+      22   USE ONLY WHEN LOADING
+      23   OFF CURRENT EDITING SCREEN
+      24   DECLARE VOCABULARY
+
+  These texts are screens 4 and 5 of the model's disc: message n is line
+  n counted from the top of screen 4, so 17 is line 1 of screen 5. If you
+  type them onto screens 4 and 5 with the editor and say  1 WARNING ! ,
+  errors are in words:
+
+      DROP DROP? EMPTY STACK
+
+  Message 15 is the last line of screen 4, which TRIAD prints under a
+  page: FORTH INTEREST GROUP and a date.
+
+  Compiler security is the name the model gives to its checks while
+  compiling. Each structure word leaves a small number on the stack and
+  its partner checks it: BEGIN leaves 1, IF and ELSE leave 2, DO leaves
+  3, WHILE leaves 4. A partner that finds another number says error 19.
+  The numbers are marks, not sizes: they are the same on a 32-bit
+  machine. And : notes the stack pointer in CSP and ; compares: if the
+  stack is not as it was, something is unfinished, error 20.
+
+  If the processor itself faults (an address that is not a multiple of 4
+  given to @ or ! is the usual way), the trap handler in board.asm prints
+  T and two numbers in hex, the cause and the address of the
+  instruction, and stops. Only a reset helps then.
+
+
+ ------------------------------------------------------------------------
+  5  THE INNER INTERPRETER
+ ------------------------------------------------------------------------
+
+  fig-FORTH is indirect threaded code. A compiled word is a list of
+  addresses, each the address of the CODE FIELD of another word; the code
+  field in turn holds the address of machine code. Five registers:
+
+      IP    s1    interpretive pointer: the next cell of the thread
+      W     a0    the code field address of the word just started
+      DSP   s0    data stack pointer (the model's SP)
+      RSP   tp    return stack pointer (the model's RP)
+      UP    gp    user area pointer
+
+  The machine's own stack pointer, sp, is left alone: an interrupt would
+  put its frame there. Both Forth stacks grow down and their pointers
+  point at the top item.
+
+  NEXT is four instructions, and every CODE word ends by jumping to it:
+
+      next:
+          lw   W, 0(IP)        the code field address of the next word
+          addi IP, IP, 4
+          lw   t0, 0(W)        what its code field holds
+          jr   t0
+
+  For a CODE word the code field points at the word's own machine code,
+  right behind it. For any other word it points at one of five pieces of
+  code, which find the word's parameters through W:
+
+      docol   a colon word     save IP on the return stack, IP = W + 4
+      docon   a CONSTANT       push the cell at W + 4
+      dovar   a VARIABLE       push W + 4
+      douse   a USER variable  push UP + the cell at W + 4
+      dodoe   a DOES> word     save IP, IP = the cell at W + 4,
+                               push W + 8
+
+  ;S is what ; compiles: it takes IP back from the return stack.
+
+  The model's shared endings are all here: a CODE word jumps to PUSH (push
+  a1, then NEXT), PUT (replace the top item by a1), POP or POPTWO.
+
+
+ ------------------------------------------------------------------------
+  6  A WORD IN THE DICTIONARY
+ ------------------------------------------------------------------------
+
+  Every word has four fields. This is DUP, a CODE word:
+
+       name field            link field    code field    parameter field
+      +----+----+----+----+-------------+-------------+----------------
+      | 83 | 44 | 55 | D0 |  nfa of the |  address of |  machine code
+      |    |  D |  U | P* |  word before|  the code   |  ...
+      +----+----+----+----+-------------+-------------+----------------
+        ^                   ^             ^             ^
+        NFA                 LFA           CFA           PFA
+
+  and this is 2+ , a colon word with a short name:
+
+      +----+----+----+----+-------------+-------------+------+------+----
+      | 82 | 32 | 2B | A0 |  nfa of 1+  |    docol    | two  | plus | ;S
+      |    |  2 |  + | b* |             |             |      |      |
+      +----+----+----+----+-------------+-------------+------+------+----
+        ^                   ^             ^             ^
+        NFA                 LFA           CFA           PFA
+                                                       (* = bit 7 set)
+
+  THE NAME FIELD starts with a length byte:
+
+        bit  7    6    5    4  3  2  1  0
+           +----+----+----+----------------+
+           |  1 |  P |  S |     length     |
+           +----+----+----+----------------+
+              |    |    |
+              |    |    +-- smudge: 1 hides the word from the search
+              |    +------- precedence: 1 = IMMEDIATE
+              +------------ always 1: it marks this end of the field
+
+  then the characters of the name, 1 to 31 of them, then (in this port)
+  blanks up to the next multiple of 4. The LAST BYTE of the field has
+  bit 7 set, whether it is a character or a blank. So the field has a 1
+  in bit 7 of its first byte and of its last byte and nowhere between.
+
+  THE LINK FIELD holds the name field address of the word defined just
+  before this one, in the same vocabulary. The first word of all (LIT)
+  holds 0. The dictionary is a chain that runs backward in time: a
+  search starts at the newest word and follows the links to older ones.
+  That is why a new word of the same name replaces an old one, and why
+  the old one comes back after FORGET.
+
+  THE CODE FIELD holds the address of machine code (section 5). It is
+  the address that gets compiled into a thread, and what EXECUTE takes.
+
+  THE PARAMETER FIELD is the body: machine code, a thread, the value of
+  a constant, the cells of a variable. It is the address that ' (tick)
+  gives, and the model takes it as the address that names a word.
+
+  The four words that go from one field to another:
+
+      PFA  ( nfa -- pfa )      1 TRAVERSE 9 +
+      NFA  ( pfa -- nfa )      9 - -1 TRAVERSE
+      CFA  ( pfa -- cfa )      4 -
+      LFA  ( pfa -- lfa )      8 -
+
+  MOVING BOTH WAYS. From the parameter field the code field and the link
+  field are a fixed distance down, because they are one cell each. The
+  name is the problem: names have any length, so the start of the name
+  field is not a fixed distance from anything. A link only helps
+  backward in time, to the previous word; nothing in a word points at
+  its own name.
+
+  The model's answer is bit 7. TRAVERSE ( addr n -- addr ), with n = 1
+  or -1, steps through memory from one end of a name field until it
+  meets a byte with bit 7 set, which is the other end:
+
+      forward    nfa   --1 TRAVERSE-->   last byte of the name field,
+                                         and 9 more is the pfa
+      backward   pfa - 9 is that last byte;
+                       ---1 TRAVERSE-->  the length byte, the nfa
+
+  (9 is 1 byte + link + code field. The model has 5 where this has 9,
+  and 2 and 4 where this has 4 and 8.)
+
+  Why both ways are wanted: the search, VLIST and FORGET walk the chain
+  by name fields (nfa -> link -> nfa -> ...). But a compiled thread and
+  the stack hold code fields and parameter fields. To print the name of
+  a word you only have the pfa of ( ' X NFA ID. ), to FORGET from a pfa,
+  to mark the newest word IMMEDIATE or smudged: all go from the body
+  back to the head.
+
+  SMUDGE. CREATE makes a header with the smudge bit set. A smudged name
+  matches nothing in a search. ; clears the bit. This is why a definition
+  can use the old word of its own name:
+
+      : DUP  DUP . DUP ;        the DUPs inside are the old DUP
+
+  and why an unfinished definition can never be called by mistake.
+
+  THE CHANGE IN THIS PORT is the padding. On the CH32V006 a 32-bit load
+  or store traps unless the address is a multiple of 4, so the link,
+  code and parameter fields must lie on cell boundaries. The name field
+  is therefore filled with blanks to a multiple of 4 and bit 7 goes on
+  the last of them. Nothing else had to change: (FIND) compares the name
+  with the text that WORD left at HERE, and WORD leaves blanks after the
+  text, so the blanks compare equal; TRAVERSE and ID. only look for
+  bit 7. CREATE got one line: round the dictionary pointer up after the
+  name.
+
+  tools/header.py prints the header of a word for the assembler.
+
+
+ ------------------------------------------------------------------------
+  7  VOCABULARIES
+ ------------------------------------------------------------------------
+
+  A vocabulary is a separate chain of words. Two user variables choose:
+  CONTEXT is the vocabulary that is searched first, CURRENT the one that
+  new words go into (and that is searched second).
+
+      VOCABULARY name IMMEDIATE     make one
+      name                          search it first (it sets CONTEXT)
+      name DEFINITIONS              and put new words into it
+
+  Note that : sets CONTEXT to CURRENT at the start of every definition.
+  That is why, after a definition or a LOAD, the editor's words are "not
+  found" until you say EDITOR again.
+
+  The body of a vocabulary is three cells:
+
+      +-------------+-------------+-------------+
+      | 81 20 20 A0 | newest word |  voc. link  |
+      +-------------+-------------+-------------+
+        a name field   ^ CONTEXT and CURRENT      ^ VOC-LINK points here:
+        that holds       point at this cell         all vocabularies,
+        one blank                                    newest first
+
+  The first cell is the clever part. It is a name field, of a word whose
+  name is one blank (which can never be typed, since the blank separates
+  words). The cell after a name field is a link field, and here that is
+  the "newest word" cell. So the body is itself a dummy word header
+  whose link is the vocabulary's own newest word.
+
+  A new vocabulary's newest word is at first the address of its parent's
+  blank name. A search of the child therefore runs through the child's
+  words, arrives at the parent's dummy header, does not match it, takes
+  its link, and is in the parent's words. Nothing in the search knows
+  about vocabularies at all:
+
+      EDITOR words:   C -> TILL -> ... -> #LOCATE --+
+                                                    |
+              +-------------------------------------+
+              v
+      FORTH's body:  [ blank name ][ newest ]--> WHERE -> EDITOR -> LINE
+                                                 -> ... -> EXECUTE -> LIT
+
+  IN THIS PORT the bodies of FORTH and EDITOR are in RAM, six cells at
+  its very start, and COLD fills them from a table in flash. They have to
+  be writable: the "newest word" changes with every definition, and the
+  kernel is in flash. For the same reason FORTH and EDITOR are colon
+  definitions that store the address of their body into CONTEXT, where
+  the model makes them with VOCABULARY. Vocabularies you make yourself
+  are made by VOCABULARY exactly as in the model, since they are in RAM
+  anyway.
+
+
+ ------------------------------------------------------------------------
+  8  THE MEMORY MAP
+ ------------------------------------------------------------------------
+
+  FLASH (it is seen at address 0, and by the flash controller at
+  08000000)
+
+      0000F800  +--------------------------------------+  <- HI
+                |                                      |
+                |  THE DISC                            |
+                |  184 blocks of 256 bytes             |
+                |  = screens 0 to 45                   |
+                |                                      |
+      00004000  +--------------------------------------+  <- LO
+                |  not used (about 3 KiB)              |
+      000032E4  +--------------------------------------+
+                |  listings.asm: the high-level words, |
+                |  the disc words, the editor          |
+      00000AC8  +- - - - - - - - - - - - - - - - - - - +
+                |  figforth.asm: the nucleus,          |
+                |  46 CODE words, the cold start       |
+      0000031C  +- - - - - - - - - - - - - - - - - - - +
+                |  the origin table                    |
+      000002E0  +- - - - - - - - - - - - - - - - - - - +  <- 0 +ORIGIN
+                |  where a reset goes: boot            |
+      000002C8  +--------------------------------------+
+                |  board.asm: vector table, serial     |
+                |  port, flash writer, trap handler    |
+      00000000  +--------------------------------------+  <- reset
+
+  RAM
+
+      20002000  +--------------------------------------+  end of RAM
+                |  8 cells, left free                  |
+      20001FE0  +--------------------------------------+  <- S0
+                |  DATA STACK, grows down              |
+                |  64 cells; ?STACK calls it full when |
+                |  fewer than 8 are left               |
+      20001EE0  +--------------------------------------+  <- R0
+                |  RETURN STACK, grows down, 64 cells  |
+      20001DE0  +--------------------------------------+
+                |  machine stack (sp), 24 cells        |
+      20001D80  +--------------------------------------+  <- LIMIT
+                |  DISC BUFFERS, 3 of 264 bytes        |
+      20001A68  +--------------------------------------+  <- FIRST
+                |  TERMINAL INPUT BUFFER, 96 bytes     |
+      20001A08  +--------------------------------------+  <- TIB @
+                |  USER AREA, 32 cells                 |
+      20001988  +--------------------------------------+  <- UP
+                |                                      |
+                |  free, about 6.5 KiB                 |
+                |              ^                       |
+                |  PAD (68 bytes above HERE)           |
+                |  text of the word being read         |
+                +- - - - - - - - - - - - - - - - - - - +  <- HERE (DP @)
+                |  THE DICTIONARY of new words,        |
+                |  grows up                            |
+      20000018  +--------------------------------------+  <- FENCE at start
+                |  body of EDITOR, 3 cells             |
+      2000000C  +--------------------------------------+
+                |  body of FORTH, 3 cells              |
+      20000000  +--------------------------------------+
+
+  Why this order. The model wants the user area to be the first thing
+  above the dictionary, because CREATE tests for a full dictionary with
+  TIB HERE 160 + <  (TIB being the address of a user variable). The two
+  Forth stacks are at the top so that the data stack, the one that
+  misbehaves most, has nothing above it but the free cells.
+
+  HERE is also the interpreter's scratch area: WORD copies every word it
+  reads to HERE (a length byte, the text, blanks), and numbers are built
+  just below PAD. So HERE EXECUTE or HERE ! typed at the terminal
+  operates on the text of the word being typed. Use PAD for scratch.
+
+  THE ORIGIN TABLE.  n +ORIGIN  is the address n bytes into it.
+
+      +00   jump to the cold start
+      +04   jump to the warm start
+      +08   CPU (0)
+      +0C   revision
+      +10   the newest word of the kernel       \
+      +14   the backspace key (7F)               |  a cold start copies
+      +18   the address of the user area         |  all eleven of these
+      +1C   S0                                   |  cells to the start of
+      +20   R0                                   |  the user area; a warm
+      +24   TIB                                  |  start copies the first
+      +28   WIDTH (31)                           |  eight
+      +2C   WARNING (0)                          |
+      +30   FENCE                                |
+      +34   DP                                   |
+      +38   VOC-LINK                            /
+
+  The offsets are not the model's: there the cells are two bytes.
+
+  THE USER AREA. A user variable is an offset into this area; in a
+  system with several tasks each would have its own. The offsets are the
+  model's, doubled.
+
+      0C  S0         where the data stack starts
+      10  R0         where the return stack starts
+      14  TIB        the address of the terminal input buffer
+      18  WIDTH      the most characters kept of a name (31)
+      1C  WARNING    0 numbers, 1 messages from the disc, -1 abort
+      20  FENCE      FORGET does not go below this
+      24  DP         the dictionary pointer; HERE is DP @
+      28  VOC-LINK   the newest vocabulary
+      2C  BLK        the block being interpreted; 0 = the terminal
+      30  IN         the offset into the text being interpreted
+      34  OUT        characters sent; EMIT counts, VLIST uses it
+      38  SCR        the screen last listed or edited
+      3C  OFFSET     added to every block number (0)
+      40  CONTEXT    the vocabulary searched first
+      44  CURRENT    the vocabulary new words go into
+      48  STATE      0 executing, C0 hex compiling
+      4C  BASE       the number base
+      50  DPL        digits after the point of the last number, or -1
+      54  FLD        field width (not used by the model either)
+      58  CSP        the stack pointer when the definition began
+      5C  R#         the editor's cursor
+      60  HLD        where the number being typed out is built
+      64  USE        the disc buffer to use next       (not user
+      68  PREV       the disc buffer used last          variables in
+                                                        the model)
+
+
+ ------------------------------------------------------------------------
+  9  THE TEXT INTERPRETER AND THE COMPILER
+ ------------------------------------------------------------------------
+
+  The outer loop is QUIT:
+
+      : QUIT  0 BLK !  [COMPILE] [
+              BEGIN  RP! CR QUERY INTERPRET
+                     STATE @ 0= IF ." OK" ENDIF  AGAIN ;
+
+  QUERY reads a line into the terminal input buffer with EXPECT and sets
+  IN to 0. EXPECT puts nulls behind the text.
+
+  INTERPRET is an endless loop with no exit of its own:
+
+      : INTERPRET
+          BEGIN  -FIND
+              IF    STATE @ <  IF CFA , ELSE CFA EXECUTE ENDIF  ?STACK
+              ELSE  HERE NUMBER  DPL @ 1+
+                    IF    [COMPILE] DLITERAL
+                    ELSE  DROP [COMPILE] LITERAL  ENDIF  ?STACK
+              ENDIF
+          AGAIN ;
+
+  -FIND takes the next word of the input (BL WORD) and searches CONTEXT,
+  then CURRENT. Found: the parameter field, the length byte, and true.
+
+  STATE @ <  is the whole decision between compiling and executing, in
+  one comparison. STATE is 0 when executing and C0 hex when compiling.
+  The length byte of an ordinary word is 80 + length, less than C0; of an
+  IMMEDIATE word it is C0 + length. So "length byte < STATE" is true only
+  when compiling an ordinary word. In every other case the word is
+  executed.
+
+  THE NULL WORD is how INTERPRET ends. The line ends in a null character.
+  WORD hands that null over as a word of one character, and the
+  dictionary has a word of exactly that name. It is immediate, and what
+  it does is  R> DROP : it throws away the return into INTERPRET, so
+  INTERPRET's caller, QUIT, goes on. From the disc the same word steps
+  to the next block and leaves at the end of the screen. In VLIST it is
+  the name that shows as nothing.
+
+  NUMBER converts the text at HERE in the current base to a double
+  number, and gives error 0 if a character is not a digit: that is the
+  "word? MSG # 0" for an unknown word.
+
+  ?STACK is called after every word and every number, which is the only
+  time the stack is checked. That has two consequences. A word that
+  takes too much has already done so when the error comes. And a word
+  that pushes more than the stack holds without returning to the
+  interpreter is not stopped at all.
+
+  COMPILING is the same loop with STATE at C0. Ordinary words are put
+  into the dictionary by  CFA , . Numbers become LIT and the number. The
+  immediate words do the rest by running: IF compiles 0BRANCH and leaves
+  the address of the offset to be filled in; ENDIF fills it in; ." puts
+  its text into the thread.
+
+  A branch holds the distance from its own cell to the target, as in the
+  model.
+
+
+ ------------------------------------------------------------------------
+ 10  THE DEFINING WORDS
+ ------------------------------------------------------------------------
+
+  CREATE makes a header from the next word of the input: the name field
+  (smudged), the link, and a code field that points at the parameter
+  field, which is what a CODE word has. Every defining word starts with
+  CREATE and then changes the code field.
+
+  ;CODE is how. In the listing:
+
+      : CONSTANT  CREATE SMUDGE ,  ;CODE
+      docon:
+          lw a1, 4(W)
+          j  push
+
+  (;CODE), the run-time part, takes the address of what follows it in the
+  thread, here the label docon, and stores it into the code field of the
+  word just created. So the machine code that all constants share sits
+  behind the definition of CONSTANT, and each constant's code field
+  points there. The same for : (docol), VARIABLE (dovar) and USER
+  (douse). These are the only machine instructions in listings.asm
+  besides MATCH and BLOCK-WRITE, and they are there because that is
+  where the model has them.
+
+  <BUILDS ... DOES> lets you write your own defining words in Forth:
+
+      : ARRAY  <BUILDS 4 * ALLOT  DOES> SWAP 4 * + ;
+      10 ARRAY X      5 3 X !     3 X @ .
+
+  <BUILDS is  0 CONSTANT : a header with one cell. When ARRAY runs and
+  reaches DOES>, that cell is given the address of the thread after
+  DOES>, and the code field is pointed at dodoe. When X runs, dodoe
+  pushes the address of X's own data and runs that thread.
+
+  ;CODE can be used at the terminal too, but there is no assembler
+  vocabulary: the instructions have to be put in with , as numbers.
+
+
+ ------------------------------------------------------------------------
+ 11  THE DISC
+ ------------------------------------------------------------------------
+
+  What the model expects. Source lives on disc in SCREENS of 1024
+  characters: 16 lines of 64. The disc is read and written in BLOCKS of
+  B/BUF bytes; B/SCR of them make a screen. n BLOCK gives the address of
+  a copy of block n in memory. The model's own disc had sectors of 128
+  bytes, so there B/BUF is 128 and B/SCR is 8; the manual allows any
+  power of two from 64 to 1024.
+
+  Here. The disc is the flash from 4000 to F800 hex. The chip erases and
+  programs its flash 256 bytes at a time and no less, so a block is that:
+
+      B/BUF  256        blocks   0 to 183
+      B/SCR    4        screens  0 to 45
+
+  Screen n is blocks 4n to 4n+3, and its lines 0-3, 4-7, 8-11 and 12-15
+  are one block each.
+
+  THE BUFFERS. Three, between FIRST and LIMIT. Each is
+
+      +--------------+-------------------------------+--------------+
+      | block number |   the block, 256 bytes        |    nulls     |
+      |   (1 cell)   |                               |   (1 cell)   |
+      +--------------+-------------------------------+--------------+
+        top bit = 1:   ^ the address that BLOCK         the null word
+        "changed"        gives                          that ends the
+                                                        text of a block
+
+  BLOCK ( n -- addr ) looks through the buffers for block n. If none
+  has it, BUFFER gives it the stalest buffer; if that one is marked as
+  changed, it is written to the disc first; then block n is read in.
+  USE points at the buffer to take next and PREV at the one used last.
+
+  UPDATE marks the buffer used last as changed. NOTHING IS WRITTEN WHEN
+  YOU CHANGE A BLOCK. It is written when its buffer is wanted for
+  another block, or when you say FLUSH (a word of the editor). If the
+  power goes first, the change is lost. The editor's words UPDATE for
+  you, but they do not FLUSH.
+
+  R/W ( addr blk f -- ) is the one word that touches the disc: f = 1
+  reads, f = 0 writes. It is the manual's RAM-disc version:
+
+      : R/W  >R  B/BUF * LO +
+             DUP LO < OVER HI B/BUF - > OR 6 ?ERROR
+             R> IF  SWAP B/BUF CMOVE
+                ELSE  BLOCK-WRITE 8 ?ERROR  ENDIF ;
+
+  Reading flash is reading memory, so a read is a CMOVE. A write is the
+  CODE word BLOCK-WRITE ( from to -- f ), which calls disc_write in
+  board.asm: erase the page, load 64 words into the controller's page
+  buffer, program, and compare the flash with the source. The processor
+  stands still for a few milliseconds each time; a key pressed in that
+  time is lost.
+
+  The kernel is protected twice. R/W gives error 6 for a block outside
+  0 to 183, and disc_write itself refuses any address that is not a
+  block of the disc. No Forth word can write below 4000.
+
+  LOAD ( scr -- ) saves BLK and IN on the return stack, points BLK at
+  the first block of the screen and calls INTERPRET. WORD then takes its
+  text from  BLK @ BLOCK  where it otherwise takes the terminal buffer.
+  When the text of a block runs out, the nulls behind it are the null
+  word, which goes on to the next block and stops after the fourth.
+  Because LOAD saves and restores, a screen may LOAD another. --> at the
+  end of a screen goes on with the next one.
+
+  LIST ( scr -- ), INDEX ( from to -- ) and TRIAD ( scr -- ) show
+  screens. MESSAGE takes its texts from screen 4 when WARNING is 1.
+
+  Things to know:
+
+  - Flash that was never written reads as FF in every byte. LIST shows
+    that as rubbish, and LOAD chokes on it. A new screen must first be
+    filled with blanks:  EDITOR n CLEAR .
+
+  - A word cannot run across the end of a block (the end of lines 3, 7
+    and 11): each block is read on its own. A definition can.
+
+  - Screen 0 cannot be loaded, because block 0 means "the terminal".
+    The model keeps a comment or a directory there. And after a cold
+    start block 0 reads as nulls until its buffer has been used for
+    something else: the cleared buffers all claim to hold block 0.
+
+  - Flash wears. The data sheet gives the number of erase cycles a page
+    stands; it is large for typing and small for a program that updates
+    a block in a loop.
+
+
+ ------------------------------------------------------------------------
+ 12  THE EDITOR
+ ------------------------------------------------------------------------
+
+  The sample editor of the manual. EDITOR makes its words known.
+
+      EDITOR
+      1 CLEAR                 screen 1 is filled with blanks; SCR is 1
+      0 P : SQ DUP * ;        put the text on line 0
+      1 P 7 SQ .
+      L                       list the screen
+      FLUSH                   write it to the disc
+      1 LOAD                  49
+
+  It works on the screen whose number is in SCR, which LIST and CLEAR
+  set. Lines are 0 to 15. There is a cursor, R#, an offset of 0 to 1023
+  into the screen. And PAD is used as a one-line clipboard: "held" below
+  means "copied to PAD".
+
+  Whole lines:
+
+      n P text      put the text on line n
+      n E           erase line n with blanks
+      n H           hold line n
+      n R           replace line n by the held line
+      n I           insert the held line at n; lines below move down
+      n D           delete line n and hold it; lines below move up
+      n S           spread: line n becomes blank, lines below move
+                    down, line 15 is lost
+      n T           type line n and hold it; the cursor to its start
+      L             list the screen
+
+  In a line. These type the cursor's line with _ at the cursor and the
+  line number at the right:
+
+      TOP           the cursor to the top left
+      n M           move the cursor by n characters (n may be negative)
+      F text        find the text, from the cursor to the end of the
+                    screen; the cursor is put after it
+      N             find it again
+      B             back by the length of the text
+      X text        find the text and delete it
+      TILL text     delete from the cursor to the end of the text, which
+                    must be on the cursor's line
+      C text        put the text in at the cursor; the rest of the line
+                    moves right and its end is lost
+
+  Screens:
+
+      n CLEAR       fill screen n with blanks and make it the screen
+      n1 n2 COPY    copy screen n1 to n2, and flush
+      FLUSH         write all changed blocks to the disc
+
+  The text after P, F, X, TILL and C starts after ONE blank and runs to
+  the end of the line; more blanks belong to the text.
+
+  WHERE ( in blk -- ) is in FORTH: after an error in a LOAD, with the two
+  numbers the error left, it shows the screen and line, marks the place
+  with ^ , and enters the editor.
+
+  Why it is in the kernel. In the manual the editor is eleven screens of
+  Forth to be loaded from disc. But its last screen does this:
+
+      LATEST 12 +ORIGIN !   HERE 28 +ORIGIN !   HERE 30 +ORIGIN !
+      ' EDITOR 6 + 32 +ORIGIN !   HERE FENCE !
+
+  It moves the cold start values past the editor: from then on the
+  editor is below FENCE and part of what a cold start brings up. On this
+  chip "part of the system" means "in the flash with the kernel", and
+  there it costs no RAM and no screens. Loaded from disc it would take
+  11 of the 46 screens and about a quarter of the dictionary, every time
+  the power comes on.
+
+  MATCH ( addr1 n1 addr2 n2 -- f n3 ) is the editor's one CODE word, the
+  search for a text in a line. The model's is 6502 code and the manual
+  says it may be translated; it is RISC-V here, in listings.asm.
+
+
+ ------------------------------------------------------------------------
+ 13  HOW THIS PORT DIFFERS FROM THE CLASSICAL ONES, AND WHY
+ ------------------------------------------------------------------------
+
+  The classical ports ran in RAM on 8- and 16-bit machines with a floppy
+  disc. Three facts about this chip account for nearly every difference.
+
+  A. THE CELL IS 32 BITS
+
+     Wherever the model has a 2 that means "one cell" it is 4 here:
+     , (2 ALLOT), COMPILE (2+), LFA CFA NFA PFA (4 2 5 5 become 8 4 9
+     9), CREATE (HERE 2+ ,), the DOES> part of VOCABULARY, the header of
+     a disc buffer. The model's own comment on its screen 39 expects
+     this: "FOLLOWING HAVE LITERALS DEPENDENT ON COMPUTER WORD SIZE".
+
+     Not every 2 is a cell. 2+ still adds 2. The 1, 2, 3 and 4 of the
+     conditionals are pairing marks. EXPECT counts characters.
+
+     A double number is 64 bits. U* gives a 64-bit product and U/ divides
+     a 64-bit number, each by the model's shift loop, 32 times round.
+     U/ here can take a divisor of all 32 bits; the model's loses a bit.
+
+     The update flag of a buffer is the top bit of a cell: 80000000 where
+     the model has 8000.
+
+  B. LOADS AND STORES MUST BE ALIGNED
+
+     lw and sw trap on an address that is not a multiple of 4. So:
+
+     - Name fields are padded with blanks to a cell (section 6).
+     - CREATE rounds the dictionary pointer up before and after the name.
+       The word that does it, ALIGN, is THE ONE WORD ADDED TO THE MODEL.
+       You want it yourself after C, or an odd ALLOT.
+     - The text behind (.") is padded, and (.") rounds the return
+       address up over it. ." rounds DP up after compiling a text.
+     - EXPECT ends a line with  0 I 1+ ! , a cell stored at any address.
+       Here it is two C! .
+     - The blank name in a vocabulary is 4 bytes (81 20 20 A0) where the
+       model has 2 (A081).
+     - @ ! and +! given an odd address stop the machine (section 4). On
+       a 6502 they just work.
+
+  C. THE KERNEL IS IN FLASH AND CANNOT BE WRITTEN
+
+     In the model everything is RAM, and it changes itself freely.
+
+     - The body of the FORTH vocabulary changes with every new word.
+       It is in RAM, and COLD fills it (section 7). EDITOR the same.
+     - USE and PREV are VARIABLEs in the model, their values in the
+       dictionary. Here they are user variables.
+     - New words go into RAM from 20000018 up, while the kernel's words
+       are in flash. FENCE starts at the bottom of RAM, so FORGET can
+       never reach into the kernel:  FORGET DUP  is error 21.
+     - The model's last screens store new values into the origin table
+       (LATEST 12 +ORIGIN ! and so on) to make a system permanent. That
+       table is in flash here; the assembler fills it in.
+
+  D. THERE IS NO DISC DRIVE
+
+     - The disc is the free flash, through the manual's RAM-disc R/W
+       (section 11). Reading is CMOVE; writing is BLOCK-WRITE.
+     - B/BUF is 256 and B/SCR is 4, because a flash page is 256 bytes.
+     - THREE buffers. The manual says two or more. With exactly two, its
+       FLUSH can pass a changed buffer by: USE steps over PREV when it
+       advances, and with two buffers that lands it on the buffer it
+       just left. A test found this. Three is the least that is safe.
+     - A cold start does EMPTY-BUFFERS and sets USE and PREV. The manual
+       tells the operator to type EMPTY-BUFFERS before first using the
+       disc. Forgetting it on a floppy system gives a bad read; here a
+       buffer of leftover RAM that looked "changed" would be programmed
+       into the flash.
+     - R/W checks both ends of the disc. The manual's RAM-disc version
+       checks only the top; below ours lies the kernel.
+     - One drive: DR0 is there, DR1 is not.
+
+  E. THE REST
+
+     - ?STACK. The model marks it "installation dependent" and tests
+       against 6502 zero-page addresses. Here: empty is S0, full is 8
+       cells before the return stack, which lies under the data stack.
+       The 8 cells are what the interpreter itself uses between words.
+       Without them a stack of 58 numbers gave no error and a crash.
+     - Eight free cells above the data stack. A word that is run on an
+       empty stack reads beyond S0. On the old machines that was just
+       more memory. Here S0 would be the very end of RAM, and a read
+       past it may trap and stop the machine. With the free cells it
+       reads rubbish and reports MSG # 1, as the model does.
+     - COLD is the model's CODE word, followed by a short thread that
+       empties the buffers and goes to ABORT.
+     - The editor is in the kernel (section 12).
+     - The greeting is  fig-FORTH RISC-V . Every installation had its
+       own; the model's says FORTH-65.
+     - MON, the jump to the 6502 monitor, is not here: there is no
+       monitor.
+
+  What did NOT change is the more important list. The dictionary
+  structure, the search, the two-state compiler with its security, the
+  vocabularies, number conversion, the error mechanism, the disc buffer
+  algorithm and the editor are the model's, word for word.
+
+
+ ------------------------------------------------------------------------
+ 14  BEHAVIOUR OF THE MODEL THAT WAS KEPT, ODD AS IT MAY BE
+ ------------------------------------------------------------------------
+
+  None of this is a fault of the port. It is fig-FORTH.
+
+  - After an error the stack holds IN and BLK (section 4).
+
+  - A word on an empty stack works on rubbish first and gets its error
+    afterwards.  .  on an empty stack prints a number.
+
+  - < is  - 0< . It is wrong when the difference overflows:
+    2000000000 -2000000000 <  is true. MIN, MAX and > are built on it.
+
+  - There is no unsigned compare and no U. ; addresses in RAM (2000xxxx
+    hex) are positive, so the signed words do for them.
+
+  - LEAVE does not leave. It ends the loop at the next LOOP.
+
+  - FILL with a count of 0 does not fill nothing: it sets out to fill 4
+    gigabytes, and the machine stops at the end of RAM. The same for
+    ERASE and BLANKS.
+
+  - -FIND searches CONTEXT and then CURRENT. A word of the vocabulary
+    you are defining into is found even when another is the context.
+
+  - : sets CONTEXT to CURRENT. Say EDITOR again after a definition.
+
+  - FORGET wants CONTEXT and CURRENT the same (error 24), and it does
+    not look after vocabularies: forgetting a word that is a vocabulary
+    leaves VOC-LINK pointing at nothing.
+
+  - ' (tick) is immediate. In a definition it takes the NEXT WORD OF THE
+    DEFINITION and compiles its address as a literal.
+
+  - An unfinished definition stays in the dictionary, hidden.
+
+  - A redefinition is announced ( DUP MSG # 4 ) and made all the same.
+
+  - COPY of a screen whose changes were not flushed moves the changes to
+    the copy; the original on the disc stays as it was. FLUSH first.
+
+  - WHERE, typed at the terminal, puts its mark a few columns left of
+    the error: it subtracts the length of the last word read, and by
+    then that word is WHERE.
+
+  - The update flag is not cleared when a write fails (error 8), so the
+    block is tried again the next time its buffer comes round.
+
+  - Backspace does not rub out on the screen.
+
+
+ ------------------------------------------------------------------------
+ 15  BUILDING, TESTING, AND THE ASSEMBLER
+ ------------------------------------------------------------------------
+
+      pip install bronzebeard
+      make            figforth.bin and figforth.labels
+      make test       the emulator tests
+      make flash      minichlink -w figforth.bin flash -b
+      make term       picocom -b 115200 /dev/ttyACM0
+
+  The image must sit at address 0: a label is its offset in the image,
+  and the threads hold labels as absolute addresses. The CH32V006 maps
+  its flash there.
+
+  TESTS. tests/rv32emu.py is an emulator of the chip (from the sixforths
+  project) that stops on whatever the real chip would trap on: an
+  unaligned load, a register above x15, a wrong sequence at the flash
+  controller.
+
+      tests/test_nucleus.py    builds a thread in RAM for each CODE word
+                               and runs it; walks the dictionary and
+                               checks every header
+      tests/test_listings.py   starts the machine and types lines at it,
+                               as at the terminal; puts screens on the
+                               disc; edits; pulls the power
+
+  The lines of test_listings.py have also been typed at the real board
+  over the serial port, and the board's flash read back before and after
+  with minichlink -r, to see that the kernel was untouched and only the
+  screens used by the test had changed.
+
+  BRONZEBEARD is a small assembler written in Python. What it taught us:
+
+  - No macros. Every header is written out; tools/header.py prints one.
+  - A label cannot be a Python keyword or look like one: in, if, else,
+    while, and, or, not. The labels are those of the old fig listings
+    (andd, orr, zequ, inn ...).
+  - One value per dw.
+  - string takes the rest of the line as it is: no comment after it, no
+    blank at its end. A text with # " ' or , in it is written as numbers.
+  - call is wrong when the target is more than 2 KiB away: it becomes
+    one jal and keeps only the low 12 bits of the distance. The first
+    BLOCK-WRITE jumped into the middle of DR0 because of this. Write
+    jal ra, label .
+  - Do not use -c (compressed instructions).
+  - A CSR number above 7FF is written as the number minus 1000 hex.
+
+  last_nfa: and last_enfa: stand on the name fields of the newest words
+  of FORTH and EDITOR. If a word is added at the end of either, its
+  label moves there.
+
+
+ ------------------------------------------------------------------------
+ 16  WHAT IS NOT HERE
+ ------------------------------------------------------------------------
+
+  - The screens of error messages. Type screens 4 and 5 of the manual
+    (section 4 has the texts) and say  1 WARNING ! .
+
+  - An ASSEMBLER vocabulary. The model's CODE and ;CODE want one. A
+    RISC-V assembler in Forth would be a project of its own, and a
+    proper one for this system: it would go on screens.
+
+  - Saving the dictionary. What you define is in RAM. The fig way to
+    keep work is to keep its source on screens and LOAD it.
+
+  - A second task. The user area is there for it; nothing else is.
+
+  - Interrupts. None is enabled. The vector table in board.asm has the
+    reset and the trap entries only.
+
+  - MON and DR1 (section 13).
+
+
+                              ----------
+
+  fig-FORTH is in the public domain through the courtesy of the Forth
+  Interest Group, P.O. Box 1105, San Carlos, CA 94070. Further
+  distribution must include that notice; it is at the top of
+  figforth.asm.

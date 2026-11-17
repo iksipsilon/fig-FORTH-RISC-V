@@ -1934,10 +1934,11 @@ dlite1:
     dw semis
 
 # ?STACK  ( -- )  error 1 if the stack is empty and more, error 7 if it is full.
-#        The model's limits are for its own memory. Here: empty is S0, and
-#        full is when the stack reaches the return stack, which lies under it.
+#        The model's limits are for its own memory. Here: empty is S0. Full
+#        is 8 cells before the return stack, which lies under the data stack:
+#        the interpreter itself needs that many between two words.
 #   : ?STACK  SP@ S0 @ SWAP < 1 ?ERROR
-#             SP@ R0 @ < 7 ?ERROR ;
+#             SP@ R0 @ 32 + < 7 ?ERROR ;
 align 4
 n_qstac:
     db 0x86
@@ -1956,6 +1957,9 @@ qstac:
     dw spat
     dw rzero
     dw at
+    dw lit
+    dw 32
+    dw plus
     dw less
     dw lit
     dw 7

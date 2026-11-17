@@ -1,0 +1,54 @@
+❯ how do I add the text interpreter? can I do it from the picocom? how did the fig-Fort
+  users start using fig-Forth on their computers? I want the CH32V006 be my computer and my
+  picocom my terminal. I want to start as if I would be in the fig-Forth era.
+
+● Not from picocom, not yet. The image on the chip can only echo keys: there is nothing in it
+  that can accept a definition. The interpreter has to be added to figforth.asm, assembled
+  on the PC and flashed. Once ok appears, everything after that can be done from picocom.
+
+  How fig-FORTH users started
+
+  That is in fact how it was done in the fig-FORTH era:
+
+  1. They bought a listing. The Forth Interest Group sold the Installation Manual (the model,
+     written in Forth, screen by screen) and a printed assembly listing for each CPU (6502,
+     8080, 6800, PDP-11 and others).
+  2. They typed the listing into their own assembler. The whole kernel was in it, not only
+     the CODE words. INTERPRET, QUIT, WORD, NUMBER, : and ; were there as lists of addresses,
+     exactly like your stand-in ABORT (one dw per word).
+  3. They rewrote only the machine-specific part. That was KEY, EMIT, ?TERMINAL, CR and the
+     disc read/write for their own hardware. Your boards/ch32v006/board.asm is that part.
+  4. They assembled, loaded and got ok. From then on they never went back to the assembler,
+     except to fix the kernel.
+  5. They built everything else in Forth. The editor came as Forth source in the manual. It
+     was typed in at the terminal or onto disc screens and then loaded with LOAD.
+
+  So you are at step 2, with the nucleus done and the colon definitions still to write.
+
+  What to add, in order
+
+  Each stage can be tested in the emulator and then on the board.
+
+  1. Get to ok. This needs the user variables, the small stack and arithmetic words, number
+     output (<# # #S #> D. .), EXPECT, QUERY, WORD, -FIND, NUMBER, ERROR, INTERPRET, QUIT and
+     the real ABORT. After this, 1 2 + . prints 3 ok and an unknown word prints ?.
+  2. The compiler. This needs CREATE, ,, :, ;, [, ], LITERAL, IMMEDIATE, IF/ELSE/ENDIF,
+     BEGIN/UNTIL/AGAIN, DO/LOOP, <BUILDS/DOES>, VLIST and FORGET. Now you define words from
+     picocom.
+  3. The disc. This needs BLOCK, BUFFER, UPDATE, FLUSH, LIST and LOAD. With it the editor can
+     be loaded from screens, as it was then.
+
+  Your README's "Next" section already lists where the model cannot be copied as it stands:
+  4-byte cells, alignment, and the kernel being in flash.
+
+  Two things that differ from a 1979 machine
+
+  - New words live in RAM. The dictionary grows in the 8 KiB of RAM, so what you define from
+    picocom is gone at power-off. On the old machines it was the same; the source on disc was
+    what survived.
+  - You have no disc. The natural stand-in is the free flash: from 0x4000 up there is room
+    for about 44 screens of 1 KiB. That needs a flash-writing routine in board.asm, and it is
+    a decision for stage 3, not now.
+
+  If you want, I can write stage 1 as threads in figforth.asm, with tests in
+  tests/test_nucleus.py, so the next flash gives you ok.

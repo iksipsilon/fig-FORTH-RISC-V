@@ -69,10 +69,11 @@ editor have run in the emulator only.
 
 | | |
 |---|---|
+| `MANUAL.txt` | how it works and why: the dictionary, the memory map, errors, the disc, the differences from the model |
 | `figforth.asm` | the nucleus: the CODE words, in the order of the model's screens, and the cold start |
 | `listings.asm` | the high-level words: colon definitions written out as threads, with the code behind `;CODE` |
 | `board.asm` | the chip (CH32V006): vector table, clock, console UART, trap handler, flash page writer |
-| `fig-FORTH_Installation_Manual.pdf` | the model: its screens are what `listings.asm` was written from |
+| `docs/fig-FORTH_Installation_Manual.pdf` | the model: its screens are what `listings.asm` was written from |
 | `tools/header.py` | prints the header of a word, to paste into the source |
 | `tests/test_nucleus.py` | assembles the image and runs every word of the nucleus in the emulator |
 | `tests/test_listings.py` | starts the image in the emulator and types lines at it |
@@ -81,8 +82,8 @@ editor have run in the emulator only.
 ## Build, test, flash
 
     pip install bronzebeard
-    make            # figforth.bin, 13016 bytes, and figforth.labels
-    make test       # 403 checks of the nucleus, 206 of the listings
+    make            # figforth.bin, 13028 bytes, and figforth.labels
+    make test       # 403 checks of the nucleus, 211 of the listings
     make flash      # minichlink -w figforth.bin flash -b
     make term       # picocom -b 115200 /dev/ttyACM0
 
@@ -164,12 +165,13 @@ ones; neither traps.
 **Memory.** Flash from 0: vector table, serial routines, the `origin` table
 (cold and warm entry, the cells `COLD` copies to the user area), the
 dictionary, and from 0x4000 the disc. RAM from the top: 8 cells left free,
-data stack (56 cells), return stack (64 cells), machine stack (24 cells), the
+data stack (64 cells), return stack (64 cells), machine stack (24 cells), the
 three disc buffers (792 bytes), terminal input buffer (96 bytes), user area
 (32 cells). RAM from the bottom: the bodies of `FORTH` and `EDITOR` (6 cells), then
 the dictionary of new words. The free cells are for a word run on an empty
-stack: it reads them, prints `MSG # 1`, and the chip does not trap. Nothing
-guards the other end: more than 56 items run into the return stack.
+stack: it reads them, prints `MSG # 1`, and the chip does not trap. At the
+other end `?STACK` says `MSG # 7` when more than 56 numbers are on the stack;
+the last 8 cells are what the interpreter itself needs between two words.
 
 ## Writing for bronzebeard
 

@@ -73,7 +73,8 @@ include board.asm
 # RAM, from the top down. Above the data stack 8 cells are left free: a word
 # that takes more than the stack holds then reads these, and not the address
 # after the last one of RAM, where the chip may trap.
-S0_INIT  = RAM_BASE + RAM_SIZE - 8 * CELL   # data stack, 56 cells
+S0_INIT  = RAM_BASE + RAM_SIZE - 8 * CELL   # data stack, 64 cells; ?STACK says
+                                            # full when fewer than 8 are left
 R0_INIT  = S0_INIT - 64 * CELL          # return stack, 64 cells
 MSP_INIT = R0_INIT - 64 * CELL          # machine stack, 24 cells
 
