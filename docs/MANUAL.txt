@@ -180,10 +180,10 @@
   does not jump out: it makes the loop end when it next reaches LOOP.
 
   The stack. 56 numbers fit. One more and the next word answers
-  MSG # 7  (full stack). A word used on an empty stack gets whatever
-  lies above the stack, and then  MSG # 1 :
+  FULL STACK . A word used on an empty stack gets whatever lies above
+  the stack, and then  EMPTY STACK :
 
-      . 32 .? MSG # 1
+      . 32 .? EMPTY STACK
 
   The 32 is not an answer. See section 14.
 
@@ -230,10 +230,10 @@
   A session:
 
       6 OK                    6 is on the stack
-      dup dup? MSG # 0        not found; the 6 is gone; 3 and 0 are there
+      dup dup?                not found; the 6 is gone; 3 and 0 are there
       . 0 OK                  BLK: the error was at the terminal
       . 3 OK                  IN: just after  dup
-      . 32 .? MSG # 1         the stack was empty
+      . 32 .? EMPTY STACK     the stack was empty
 
   The two numbers are for WHERE ( in blk -- ), a word of the editor
   screens: after an error while a screen was being loaded, WHERE shows
@@ -244,9 +244,15 @@
   not the half-made word: its header stays in the dictionary, hidden
   (see "smudge" in section 6), and takes its room until a FORGET or COLD.
 
-  The messages. With WARNING 0, which is how the system starts:
+  The messages. The system starts with WARNING 1, as the model's does,
+  and an error is typed in words:
 
-       0   (the word is not known, and is not a number)
+      DROP DROP? EMPTY STACK
+
+  The texts are lines of screens 4 and 5 of the disc: message n is line
+  n counted from the top of screen 4, so 17 is line 1 of screen 5.
+
+       0   (no text: the word is not known, and is not a number)
        1   EMPTY STACK
        2   DICTIONARY FULL
        4   ISN'T UNIQUE          a warning, not an error: the word is made
@@ -262,15 +268,25 @@
       23   OFF CURRENT EDITING SCREEN
       24   DECLARE VOCABULARY
 
-  These texts are screens 4 and 5 of the model's disc: message n is line
-  n counted from the top of screen 4, so 17 is line 1 of screen 5. If you
-  type them onto screens 4 and 5 with the editor and say  1 WARNING ! ,
-  errors are in words:
-
-      DROP DROP? EMPTY STACK
-
   Message 15 is the last line of screen 4, which TRIAD prints under a
-  page: FORTH INTEREST GROUP and a date.
+  page: FORTH INTEREST GROUP.
+
+  With  0 WARNING !  a message is only its number, as  DROP? MSG # 1 ,
+  and the disc is not read; COLD sets it back to 1. That is the
+  model's setting for a system without a disc. It is the one to use if
+  screens 4 and 5 are empty, on a new chip or after they were written
+  over: with WARNING 1 every error would then type a line of erased
+  flash. To put the texts back, type them with the editor:
+
+      EDITOR
+      4 CLEAR
+      0 P ( ERROR MESSAGES )
+      1 P EMPTY STACK
+      ...
+      15 P FORTH INTEREST GROUP
+      5 CLEAR
+      ...
+      FLUSH
 
   Compiler security is the name the model gives to its checks while
   compiling. Each structure word leaves a small number on the stack and
@@ -578,7 +594,7 @@
       +20   R0                                   |  the user area; a warm
       +24   TIB                                  |  start copies the first
       +28   WIDTH (31)                           |  eight
-      +2C   WARNING (0)                          |
+      +2C   WARNING (1)                          |
       +30   FENCE                                |
       +34   DP                                   |
       +38   VOC-LINK                            /
@@ -660,7 +676,8 @@
 
   NUMBER converts the text at HERE in the current base to a double
   number, and gives error 0 if a character is not a digit: that is the
-  "word? MSG # 0" for an unknown word.
+  "word?" with nothing after it for an unknown word (message 0 has no
+  text; with WARNING 0 it is "word? MSG # 0").
 
   ?STACK is called after every word and every number, which is the only
   time the stack is checked. That has two consequences. A word that
@@ -954,7 +971,7 @@
             cursor by n.
 
   Typed without its number, a line command here takes whatever is on
-  the stack, or stops with MSG # 1 when the stack is empty.
+  the stack, or stops with EMPTY STACK when the stack is empty.
 
   TO DO: THE BOOK'S EDITOR ON TOP OF THIS ONE. Renaming the words above
   would not give the book's editor: its line commands take no number,
@@ -1016,7 +1033,7 @@
       7 FORTH DEFINITIONS
       8 ;S
 
-  2. 10 LOAD . It answers MSG # 4 thirteen times, once for each name
+  2. 10 LOAD . It answers ISN'T UNIQUE thirteen times, once for each name
      that is also in EDITOR or FORTH (T P X F S E D TILL I R N B M);
      that is a warning and it goes on. The layer takes 1460 bytes of
      the dictionary. It is gone at power-off or COLD: load it again.
@@ -1047,7 +1064,7 @@
       LINE#    the line of the cursor.
       KEEP     the cursor's line to IBUF.
       UNDER    IBUF under the cursor's line, with S of EDITOR. On line
-               15 there is no line under it: MSG # 23.
+               15 there is no line under it: OFF CURRENT EDITING SCREEN.
       T        not T of EDITOR, because that holds the line at PAD and
                the text to find would be lost.
       P U      ?TEXT, then -MOVE or UNDER. U moves the cursor to the
@@ -1185,7 +1202,7 @@
        empty stack reads beyond S0. On the old machines that was just
        more memory. Here S0 would be the very end of RAM, and a read
        past it may trap and stop the machine. With the free cells it
-       reads rubbish and reports MSG # 1, as the model does.
+       reads rubbish and reports EMPTY STACK, as the model does.
      - COLD is the model's CODE word, followed by a short thread that
        empties the buffers and goes to ABORT.
      - The editor is in the kernel (section 12).
@@ -1237,7 +1254,8 @@
 
   - An unfinished definition stays in the dictionary, hidden.
 
-  - A redefinition is announced ( DUP MSG # 4 ) and made all the same.
+  - A redefinition is announced ( DUP ISN'T UNIQUE ) and made all the
+    same.
 
   - COPY of a screen whose changes were not flushed moves the changes to
     the copy; the original on the disc stays as it was. FLUSH first.
@@ -1352,7 +1370,8 @@
 
   brings the assembler back after every cold start or power-on; the
   --> at the end of each screen goes on to the next. The load says
-  ;CODE MSG # 4 : the new ;CODE hides the kernel's, which is meant.
+  ;CODE ISN'T UNIQUE : the new ;CODE hides the kernel's, which is
+  meant.
   Screens 40 and 41 are the ones make test-board writes over; 42 to 45
   are not touched by it.
 
@@ -1476,9 +1495,6 @@
  ------------------------------------------------------------------------
  17  WHAT IS NOT HERE
  ------------------------------------------------------------------------
-
-  - The screens of error messages. Type screens 4 and 5 of the manual
-    (section 4 has the texts) and say  1 WARNING ! .
 
   - Saving the dictionary. What you define is in RAM. The fig way to
     keep work is to keep its source on screens and LOAD it.

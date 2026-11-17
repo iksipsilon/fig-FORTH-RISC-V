@@ -58,7 +58,17 @@ def run_to_idle(e, max_steps=20_000_000):
             raise AssertionError("emulator fault %r after %r" % (e.fault, bytes(e.uart_out)[-80:]))
     raise AssertionError("no end after %d steps, pc = %#x" % (max_steps, e.pc))
 
+# The error messages are on screens 4 and 5 of the disc, as on the board:
+# message n is line n counted from the top of screen 4. WARNING starts at 1.
+MESSAGES = ["( ERROR MESSAGES )", "EMPTY STACK", "DICTIONARY FULL", "", "ISN'T UNIQUE", "",
+            "DISC RANGE ?", "FULL STACK", "DISC ERROR", "", "", "", "", "", "",
+            "FORTH INTEREST GROUP",
+            "( ERROR MESSAGES )", "COMPILATION ONLY, USE IN DEFINITION", "EXECUTION ONLY",
+            "CONDITIONALS NOT PAIRED", "DEFINITION NOT FINISHED", "IN PROTECTED DICTIONARY",
+            "USE ONLY WHEN LOADING", "OFF CURRENT EDITING SCREEN", "DECLARE VOCABULARY",
+            "", "", "", "", "", "", "FORTH INTEREST GROUP"]
 BOOTED = Emu(IMAGE, b"")
+BOOTED.f[0x4000 + 4 * 1024:0x4000 + 6 * 1024] = b"".join(l.encode().ljust(64) for l in MESSAGES)
 run_to_idle(BOOTED)
 
 def keys(e, data):
@@ -159,8 +169,8 @@ check("none of them is immediate", [w[0] for w in EWORDS if w[2] & 0x40], [])
 check("cold start", bytes(BOOTED.uart_out), b"\r\nfig-FORTH RISC-V\r\n")
 t("", "", "an empty line")
 t("1 2 + .", "3 ")
-err("FOO", "FOO? MSG # 0 ")
-err("dup", "dup? MSG # 0 ", "lower case is not upper case")
+err("FOO", "FOO? ")
+err("dup", "dup? ", "lower case is not upper case")
 t(["1 2 FOO", ". . SP@ S0 @ = ."], "0 7 1 ",
   "an error empties the stack, then leaves IN and BLK on it")
 t("( A COMMENT ) 5 .", "5 ")
@@ -180,7 +190,7 @@ t("HEX FF DECIMAL .", "255 ")
 t("HEX -1 . 7FFFFFFF . DECIMAL", "-1 7FFFFFFF ")
 t("255 HEX . DECIMAL", "FF ")
 t("5 2 BASE ! . DECIMAL", "101 ")
-err("12G", "12G? MSG # 0 ")
+err("12G", "12G? ")
 t("1.5 D. DPL @ .", "15 1 ", "a point makes a double number")
 t("15 DPL @ .", "-1 ")
 t("-123456789012. D.", "-123456789012 ")
@@ -231,7 +241,7 @@ t([": T 0 BEGIN 1+ DUP 4 = IF . ;S THEN AGAIN ;", "T"], "4 ")
 t([": T 10 0 DO I . LOOP ;", "T"], "0 1 2 3 4 5 6 7 8 9 ")
 t([": T 10 0 DO I . 3 +LOOP ;", "T"], "0 3 6 9 ")
 t([": T 0 10 DO I . -4 +LOOP ;", "T"], "10 6 2 ")
-err([": T 3 0 DO 2 0 DO J? LOOP LOOP ;"], "J?? MSG # 0 ", "an unknown word while compiling")
+err([": T 3 0 DO 2 0 DO J? LOOP LOOP ;"], "J?? ", "an unknown word while compiling")
 t([": T 3 0 DO 12 10 DO I . LOOP I . LOOP ;", "T"], "10 11 0 10 11 1 10 11 2 ")
 t([": T 10 0 DO I 3 = IF LEAVE THEN I . LOOP ;", "T"], "0 1 2 3 ",
   "LEAVE ends the loop at LOOP")
@@ -251,7 +261,7 @@ t([": CON <BUILDS , DOES> @ ;", "5 CON FIVE 6 CON SIX", "FIVE . SIX . FIVE SIX +
 t([": ARR <BUILDS 4 * ALLOT DOES> SWAP 4 * + ;", "3 ARR X", "11 0 X ! 22 1 X ! 33 2 X !",
    "0 X @ . 1 X @ . 2 X @ ."], "11 22 33 ")
 t([": T 5 ;", ": T T 1 + ;", "T ."], "6 ", "a word may use the one it replaces")
-t([": DUP ;"], "DUP MSG # 4  ", "a name that is there already")
+t([": DUP ;"], "DUP ISN'T UNIQUE ", "a name that is there already")
 t(["3 ALLOT", ": T 5 ;", "T ."], "5 ", "CREATE puts the header on a cell boundary")
 t("HERE 1 C, ALIGN HERE SWAP - .", "4 ")
 t("HERE 5 , HERE OVER - . @ .", "4 5 ")
@@ -278,37 +288,37 @@ t("PAD HERE - .", "68 ")
 
 # ---------------------------------------------------------------- errors
 
-err("DROP", "DROP? MSG # 1 ", "an empty stack")
+err("DROP", "DROP? EMPTY STACK", "an empty stack")
 e = copy.deepcopy(BOOTED)                   # what . prints here is whatever the free cell holds
-check(". on an empty stack", say(e, ".").split(" ", 1)[1], ".? MSG # 1 \r\n")
+check(". on an empty stack", say(e, ".").split(" ", 1)[1], ".? EMPTY STACK\r\n")
 e = t([": PUSHES 0 DO I LOOP ;", "56 PUSHES"], "", "56 numbers fit on the stack")
 ask = lambda e, line, want, what=None, ok="OK": check(what or line, say(e, line), want + ok + "\r\n")
 ask(e, "+ DROP . 12345678 . -1. D.", "53 12345678 -1 ", "and the interpreter still has room to work")
-err([": PUSHES 0 DO I LOOP ;", "57 PUSHES"], "PUSHES? MSG # 7 ", "one more is a full stack")
-e = err([": PUSHES 0 DO I LOOP ;", "60 PUSHES"], "PUSHES? MSG # 7 ")
+err([": PUSHES 0 DO I LOOP ;", "57 PUSHES"], "PUSHES? FULL STACK", "one more is a full stack")
+e = err([": PUSHES 0 DO I LOOP ;", "60 PUSHES"], "PUSHES? FULL STACK")
 ask(e, "DROP DROP 1 2 + .", "3 ", "and the machine goes on after it")
-err("IF", "IF? MSG # 17 ", "compilation only")
-err([": T : ;"], ":? MSG # 18 ", "execution only")
-err([": T 1 IF ;"], ";? MSG # 20 ", "a definition not finished")
-err([": T THEN ;"], "THEN? MSG # 19 ", "conditionals not paired")
-err([": T BEGIN LOOP ;"], "LOOP? MSG # 19 ")
+err("IF", "IF? COMPILATION ONLY, USE IN DEFINITION", "compilation only")
+err([": T : ;"], ":? EXECUTION ONLY", "execution only")
+err([": T 1 IF ;"], ";? DEFINITION NOT FINISHED", "a definition not finished")
+err([": T THEN ;"], "THEN? CONDITIONALS NOT PAIRED", "conditionals not paired")
+err([": T BEGIN LOOP ;"], "LOOP? CONDITIONALS NOT PAIRED")
 t([": T 1", "2 + . ;", "T"], "3 ", "a definition over two lines")
 t([": T FOO", "1 2 + ."], "3 ", "an error leaves the compiler")
-err("-->", "-->? MSG # 22 ", "--> is for a screen that is being loaded")
-err("' NOPE", "NOPE? MSG # 0 ")
+err("-->", "-->? USE ONLY WHEN LOADING", "--> is for a screen that is being loaded")
+err("' NOPE", "NOPE? ")
 err(["-1 WARNING !", "FOO"], "\r\nfig-FORTH RISC-V", "WARNING below 0: an error aborts")
 
 # ---------------------------------------------------------------- FORGET, vocabularies
 
 e = t([": A 1 ;", "HERE", ": B 2 ;", "FORGET B", "HERE = . A ."], "1 1 ")
-check("FORGET takes the word out", say(e, "B"), "B? MSG # 0 \r\n")
-err("FORGET DUP", "DUP? MSG # 21 ", "the kernel is below FENCE")
-err("FORGET NOPE", "NOPE? MSG # 0 ")
+check("FORGET takes the word out", say(e, "B"), "B? \r\n")
+err("FORGET DUP", "DUP? IN PROTECTED DICTIONARY", "the kernel is below FENCE")
+err("FORGET NOPE", "NOPE? ")
 err(["VOCABULARY V IMMEDIATE", "V DEFINITIONS", ": X 7 ;", "X . 2 DUP + .", "FORTH DEFINITIONS X"],
-  "X? MSG # 0 ", "a word of another vocabulary is not seen from FORTH")
+  "X? ", "a word of another vocabulary is not seen from FORTH")
 t(["VOCABULARY V IMMEDIATE", "V DEFINITIONS", ": X 7 ;", "FORTH DEFINITIONS", ": Y V X FORTH ;",
    "Y ."], "7 ")
-err(["VOCABULARY V IMMEDIATE", "V DEFINITIONS", "FORTH", "FORGET DUP"], "FORGET? MSG # 24 ",
+err(["VOCABULARY V IMMEDIATE", "V DEFINITIONS", "FORTH", "FORGET DUP"], "FORGET? DECLARE VOCABULARY",
     "FORGET wants CONTEXT and CURRENT the same")
 t(["VOCABULARY V IMMEDIATE", "VOC-LINK @ ' V 12 + = . ' V 12 + @ %d = ." % (RAM + 5 * CELL)],
   "1 1 ", "the vocabulary link")
@@ -379,8 +389,8 @@ ask(e, "1 BLOCK C@ . 183 BLOCK C@ .", "67 68 ", "the disc keeps it without power
 ask(e, "2 BLOCK DROP 3 BLOCK DROP 4 BLOCK DROP 5 BLOCK DROP 6 BLOCK DROP", "")
 check("a cold start empties the buffers: nothing is written from them", bytes(e.f), flash)
 
-err("184 BLOCK", "BLOCK? MSG # 6 ", "past the end of the disc")
-err("-1 BLOCK", "BLOCK? MSG # 6 ", "before its start is the kernel")
+err("184 BLOCK", "BLOCK? DISC RANGE ?", "past the end of the disc")
+err("-1 BLOCK", "BLOCK? DISC RANGE ?", "before its start is the kernel")
 e = copy.deepcopy(BOOTED)
 before = bytes(e.f)
 ask(e, "FIRST 4 + 0 BLOCK-WRITE . FIRST 4 + LO 1+ BLOCK-WRITE .", "1 1 ",
@@ -398,7 +408,7 @@ for first in ["", "2 BLOCK DROP", "2 BLOCK DROP 3 BLOCK DROP", "2 BLOCK DROP 3 B
 e = copy.deepcopy(BOOTED)
 e.flash_stuck = {LO + 256: 0}               # a worn-out byte
 say(e, FLUSH)
-ask(e, "67 1 BLOCK C! UPDATE FLUSH", "FLUSH? MSG # 8 ", "the flash did not take the block", ok="")
+ask(e, "67 1 BLOCK C! UPDATE FLUSH", "FLUSH? DISC ERROR", "the flash did not take the block", ok="")
 
 SQ = [": SQ DUP * ;", "7 SQ .", "", "( THE LAST LINE OF THE FIRST BLOCK ) 1 .", "2 .", "", "", "",
       "", "", "", "", "", "", "", "3 ."]
@@ -410,7 +420,7 @@ ask(e, "1 LOAD", "1 2 ", "--> goes on with the next screen")
 e = disc((1, [": A 3 LOAD ; A 5 ."]), (3, ["4 ."]))
 ask(e, "1 LOAD", "4 5 ", "a screen may load another")
 e = disc((3, ["1 .", " FOO"]))
-ask(e, "3 LOAD", "1 FOO? MSG # 0 ", "an error on a screen", ok="")
+ask(e, "3 LOAD", "1 FOO? ", "an error on a screen", ok="")
 ask(e, ". . BLK @ .", "12 69 0 ", "leaves where it was: BLK and IN")
 
 e = disc((1, SQ))
@@ -423,13 +433,18 @@ ask(e, "1 3 INDEX", "\x0c\r\n\r\n  1 ( ONE )\r\n  2 ( TWO )\r\n  3 ( THREE )")
 out = say(e, "4 TRIAD")
 check("TRIAD lists the three screens of the page", [l for l in out.split("\r\n") if "SCR #" in l],
       ["SCR # 3 ", "SCR # 4 ", "SCR # 5 "])
-check("and ends with message 15", out.endswith("\r\nMSG # 15 \r\nOK\r\n"), True)
+check("and ends with message 15", out.endswith("\r\nFORTH INTEREST GROUP\r\nOK\r\n"), True)
 
-e = disc((4, ["( ERROR MESSAGES )", "EMPTY STACK", "DICTIONARY FULL", "", "ISN'T UNIQUE"]))
-ask(e, "1 WARNING !", "")
+e = copy.deepcopy(BOOTED)
+ask(e, "WARNING @ .", "1 ", "the system starts with WARNING 1")
 ask(e, "DROP", "DROP? EMPTY STACK", "with WARNING 1 a message is a line of screen 4", ok="")
+ask(e, "IF", "IF? COMPILATION ONLY, USE IN DEFINITION", "and message 17 is line 1 of screen 5", ok="")
 ask(e, ": DUP ;", "DUP ISN'T UNIQUE ")
 ask(e, "FOO", "FOO? ", "message 0 is nothing", ok="")
+e = copy.deepcopy(BOOTED)
+ask(e, "0 WARNING !", "")
+ask(e, "DROP", "DROP? MSG # 1 ", "with WARNING 0 a message is its number", ok="")
+ask(e, "FOO", "FOO? MSG # 0 ", ok="")
 
 # ---------------------------------------------------------------- the editor
 
@@ -450,7 +465,7 @@ def lines_of(e, n):
     scr = bytes(e.f[LO + 1024 * n:LO + 1024 * (n + 1)])
     return [scr[i:i + 64].decode("latin-1").rstrip(" ") for i in range(0, 1024, 64)]
 
-err("FLUSH", "FLUSH? MSG # 0 ", "the editor's words are not seen from FORTH")
+err("FLUSH", "FLUSH? ", "the editor's words are not seen from FORTH")
 
 START = ["1 CLEAR", "0 P : SQ DUP * ;", "1 P 7 SQ ."]
 e, out = edit(START + ["FLUSH"])
@@ -478,7 +493,7 @@ check("X finds a text and deletes it", out, shown(": SQ _* ;", 0))
 e, out = edit(START + ["TOP F SQ", "TILL *"])
 check("TILL deletes from the cursor to the end of a text", out, shown(": SQ_ ;", 0))
 e, out = edit(START + ["TOP F NOPE"])
-check("a text that is not on the screen", out, "NOPE? MSG # 0 \r\n")
+check("a text that is not on the screen", out, "NOPE? \r\n")
 ask(e, "DROP DROP R# @ .", "0 ", "leaves the cursor at the top")
 e, out = edit(START + ["0 D", "FLUSH"])
 check("D deletes a line", lines_of(e, 1), ["7 SQ ."] + [""] * 15)
@@ -495,7 +510,7 @@ e, out = edit(START + ["FLUSH", "1 2 COPY"])
 check("COPY copies a screen, and flushes", lines_of(e, 2), lines_of(e, 1))
 check("and the first is there too", lines_of(e, 1), [": SQ DUP * ;", "7 SQ ."] + [""] * 14)
 e, out = edit(START + ["16 T"])
-check("a line that is not on the screen", out, "T? MSG # 23 \r\n")
+check("a line that is not on the screen", out, "T? OFF CURRENT EDITING SCREEN\r\n")
 e, out = edit(["PAD 20 BLANKS 65 PAD C! 66 PAD 1+ C! 67 PAD 9 + C!",
                "PAD 10 PAD 1 MATCH . . PAD 10 PAD 9 + 1 MATCH . . PAD 10 HERE 0 MATCH . ."])
 check("MATCH finds a text", out, "1 1 10 1 0 1 OK\r\n")
@@ -523,7 +538,7 @@ check("forth-assembler.f is four screens", len(ASM), 64)
 check("no line of it runs into the next on a screen", max(len(l) for l in ASM) <= 63, True)
 check("each of the first three ends in -->", [ASM[16 * k + 15] for k in range(3)], ["-->"] * 3)
 e = disc(*[(ASM_SCR + k, ASM[16 * k:16 * k + 16]) for k in range(4)])
-ask(e, "%d LOAD" % ASM_SCR, ";CODE MSG # 4  ", "the assembler loads from the disc")
+ask(e, "%d LOAD" % ASM_SCR, ";CODE ISN'T UNIQUE ", "the assembler loads from the disc")
 ask(e, "BASE @ . CONTEXT @ CURRENT @ = .", "10 1 ", "and leaves DECIMAL and FORTH")
 ASMED = e
 
@@ -593,12 +608,12 @@ asm([": CON  CREATE SMUDGE ,  ;CODE  A1 4 W LW,  A1 PUSH,  END-CODE",
      "1234 CON X", "X . CONTEXT @ CURRENT @ = ."], "1234 1 ", ";CODE ... END-CODE")
 e = copy.deepcopy(ASMED)
 check("an IF, without THEN, is error 20 at END-CODE",
-      say(e, "CODE BAD  A1 ZERO NE IF,  END-CODE"), "END-CODE? MSG # 20 \r\n")
+      say(e, "CODE BAD  A1 ZERO NE IF,  END-CODE"), "END-CODE? DEFINITION NOT FINISHED\r\n")
 
 # ---------------------------------------------------------------- cold and warm
 
 e = err([": T 5 ;", "COLD"], "\r\nfig-FORTH RISC-V", "COLD")
-check("COLD forgets the new words", say(e, "T"), "T? MSG # 0 \r\n")
+check("COLD forgets the new words", say(e, "T"), "T? \r\n")
 check("COLD puts the dictionary pointer back", say(e, "HERE ."), "%d OK\r\n" % (RAM + 6 * CELL))
 e = t([": T 5 ;", "HEX"], "")
 e.pc = L["origin"] + 4

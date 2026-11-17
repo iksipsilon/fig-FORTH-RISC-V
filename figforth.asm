@@ -141,7 +141,7 @@ boot_up:                        # the cells COLD copies to the user area
     dw R0_INIT                  # +0x20  initial top of return stack (R0)
     dw TIB_INIT                 # +0x24  terminal input buffer (TIB)
     dw 31                       # +0x28  initial name field width (WIDTH)
-    dw 0                        # +0x2C  initial WARNING: 0, no disc yet
+    dw 1                        # +0x2C  initial WARNING: 1, the model's: texts on scr 4, 5
     dw DP_INIT                  # +0x30  initial FENCE
     dw DP_INIT                  # +0x34  cold start value for DP
     dw EDITOR_VOC + 2*CELL      # +0x38  cold start value for VOC-LINK

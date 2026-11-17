@@ -98,8 +98,8 @@
 
   - The assembler REDEFINES ;CODE as the kernel's with [COMPILE]
     ASSEMBLER in the place of SMUDGE, so it follows the glossary, and
-    END-CODE ends both. Loading therefore prints ;CODE MSG # 4 (with
-    two blanks after the 4): intended.
+    END-CODE ends both. Loading therefore prints ;CODE ISN'T UNIQUE
+    (with WARNING 0: ;CODE MSG # 4, two blanks after the 4): intended.
 
   - Not there: compressed instructions, LI, , and (yet) the system
     instructions: see section 6.
@@ -110,7 +110,7 @@
   board): file shape (64 lines, <= 63 chars, --> ends screens 1-3),
   42 LOAD from the emulated disc, 41 instructions compared with
   bronzebeard bit for bit (CASES list; a temporary .asm with labels
-  L0..Ln), and the manual's examples. make test: 279 + 403 checks, all
+  L0..Ln), and the manual's examples. make test: 283 + 403 checks, all
   passing at the time of writing.
 
 
@@ -119,8 +119,9 @@
  ------------------------------------------------------------------------
 
   Where: screens 42 to 45, the last four of the disc (0-45). Chosen by
-  the user. 4 and 5 are for the error messages (model convention), 40
-  and 41 are overwritten by make test-board, 0 cannot be loaded.
+  the user. 4 and 5 hold the error messages (written 2026-11-17 with
+  put_screens.py; WARNING starts at 1, the model's value), 40 and 41
+  are overwritten by make test-board, 0 cannot be loaded.
 
   How: make put-assembler = tools/put_screens.py FILE 42 [port]
   [--force]. It types EDITOR, n CLEAR, n P line ..., FLUSH, FORTH at
