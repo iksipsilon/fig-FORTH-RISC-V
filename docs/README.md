@@ -5,9 +5,16 @@ written for the [bronzebeard](https://github.com/theandrew168/bronzebeard)
 assembler. The first target is the WCH CH32V006 (RV32EC, 62 KiB flash,
 8 KiB RAM).
 
-**What is here: the model, with its editor.** The 46 CODE words (the nucleus,
-with one more, `UPPER`, so that names may be typed in small letters),
-176 high-level words in `FORTH` (the text interpreter, the compiler, the
+**What is here: the model, with its editor.** The 47 CODE words of the
+nucleus: the model's 46, in the order of its screens, and `UPPER` after
+`(FIND)`, so that names may be typed in small letters:
+
+    LIT EXECUTE BRANCH 0BRANCH (LOOP) (+LOOP) (DO) I DIGIT (FIND) UPPER
+    ENCLOSE EMIT KEY ?TERMINAL CR CMOVE U* U/ AND OR XOR SP@ SP! RP! ;S
+    LEAVE >R R> R 0= 0< + D+ MINUS DMINUS OVER DROP SWAP DUP +! TOGGLE
+    @ C@ ! C! S->D
+
+Then 176 high-level words in `FORTH` (the text interpreter, the compiler, the
 defining words, vocabularies, number input and output, `FORGET`, `VLIST`, and
 the disc: `BLOCK` `BUFFER` `UPDATE` `LOAD` `-->` `LIST` `INDEX` `TRIAD`) and the
 28 words of the `EDITOR` vocabulary. It starts, reads a line, and answers
@@ -16,14 +23,22 @@ the disc: `BLOCK` `BUFFER` `UPDATE` `LOAD` `-->` `LIST` `INDEX` `TRIAD`) and the
     fig-FORTH RISC-V
     : SQ DUP * ; OK
     7 SQ . 49 OK
-    FOO FOO? MSG # 0
+    DROP DROP? EMPTY STACK
 
 Names are kept in capitals, as then, but may be typed in small letters
 (`dup` is `DUP`): the one change that is not the model's and not the chip's.
-An error is a number (the list is in the Installation Manual): 0 not found,
-1 empty stack, 4 not unique, 6 disc range, 8 disc error, 17 compilation only,
-18 execution only, 19 conditionals not paired, 20 definition not finished,
-21 in protected dictionary, 24 declare vocabulary. After an error two numbers are on the stack, `IN` and `BLK`.
+An error types the word that failed, a question mark, and its message. The
+messages are lines of screens 4 and 5 of the disc, read because `WARNING` is
+1, as in the model; message 0, a word that is not known, has no text, so
+`FOO` answers only `FOO?`. With `0 WARNING !` a message is only its number,
+`DROP? MSG # 1`, and the disc is not read: use that when screens 4 and 5 are
+empty, on a new chip or after they were written over (MANUAL.txt section 4
+has the list and how to type the texts back). The numbers are the Installation
+Manual's: 0 not found, 1 empty stack, 4 not unique, 6 disc range, 7 full
+stack, 8 disc error, 17 compilation only, 18 execution only, 19 conditionals
+not paired, 20 definition not finished, 21 in protected dictionary, 22 use
+only when loading, 23 off current editing screen, 24 declare vocabulary.
+After an error two numbers are on the stack, `IN` and `BLK`.
 
 New words go into RAM (about 6.5 KiB) and are gone at power-off. What is
 written to the disc stays.
@@ -34,7 +49,8 @@ is 256 bytes, one page of the flash; a screen is 4 blocks; there are screens
 changed (`UPDATE`) is written when its buffer is wanted for another, or by
 `FLUSH`. A flash that was never written reads as FF, which `LIST` shows as
 rubbish; the sixforths source lines are still there until they are written
-over.
+over. Screens 4 and 5 hold the error messages, `make test-board` writes over
+40 and 41, and 42 to 45 hold the assembler (`42 LOAD`).
 
 **The editor** is the sample editor of the manual (screens 87 to 97), in the
 kernel. `EDITOR` makes its words known; a `:` or a `LOAD` goes back to
@@ -63,9 +79,13 @@ kernel. `EDITOR` makes its words known; a `:` or a `LOAD` goes back to
 
 After an error in a `LOAD`, `WHERE` shows the line and enters the editor.
 
-The nucleus and the high-level words without the disc have run on the chip:
-the lines of `tests/test_listings.py` were typed at it. The disc and the
-editor have run in the emulator only.
+All of it has run on the chip. `make test-board` types the lines of
+`tests/test_listings.py` at it, then writes a screen with the editor, resets
+the chip and checks that the screen is still there. The error messages and
+the assembler were put on the board's disc with the editor
+(`tools/put_screens.py`), and the assembler's examples (MANUAL.txt section
+16) gave on the chip the same answers as in the emulator: the chip runs code
+from RAM.
 
 ## Files
 
@@ -127,10 +147,17 @@ and bit 7 marks its last byte, blank or not:
 `(FIND)` needs no change for this, because `WORD` leaves blanks after the text
 it puts at `HERE`. `CREATE` rounds `DP` up before and after the name. `ALIGN`
 does that; it is not a word of the model, and it is wanted after `C,` or an
-odd `ALLOT`. The text after `(.")` is padded the same way.
+odd `ALLOT`. The text after `(.")` is padded the same way, and `(.")` steps
+over it to the next cell. `EXPECT` ends a line with `0 I 1+ !`, a cell stored
+at any address: here it is two `C!`. The blank name in a vocabulary is four
+bytes (81 20 20 A0) where the model has two (A081).
 
 **The cell is 4 bytes** wherever the model has a 2 that means a cell: `,`
-`COMPILE` `LFA` `CFA` `NFA` `PFA` `CREATE` `VOCABULARY`. `2+` still adds 2.
+`COMPILE` `LFA` `CFA` `NFA` `PFA` (4 2 5 5 become 8 4 9 9) `CREATE`
+`VOCABULARY`, the header of a disc buffer. Not every 2 is a cell: `2+` still
+adds 2, the 1 2 3 4 of the conditionals are pairing marks, and `EXPECT`
+counts characters. The update flag of a buffer is the top bit of a cell,
+80000000 where the model has 8000.
 
 **The kernel is in flash**, so nothing in it can change. The body of the
 `FORTH` vocabulary (its newest word) is three cells at the start of RAM that
@@ -158,8 +185,8 @@ count of buffers is a number and the step back to the block number is 4.
 **Everything else is the model's**, definition for definition: `<` is `- 0<`,
 an error leaves `IN` and `BLK` on the stack, `LEAVE` ends the loop at the next
 `LOOP`, and `:` `CONSTANT` `VARIABLE` `USER` `DOES>` end in `;CODE` with their
-machine code behind it (`docol` `docon` `dovar` `douse` `dodoe`). The one word
-added is `ALIGN`.
+machine code behind it (`docol` `docon` `dovar` `douse` `dodoe`). The two
+words added are `ALIGN` and `UPPER`.
 
 **Branches** hold the distance from their own cell to the target, as in the
 model. bronzebeard's `%offset(label)` is exactly that number.
@@ -209,10 +236,15 @@ Found while writing this; each was tried.
   forms before the addresses are final; with this source, `li IP, abort + CELL`
   then stops the assembly with "imm must not be 0".
 
-## Next
+## Not here yet
 
-The screens of error messages (4 and 5 in the manual) are not on the disc.
-Type them with the editor and set `1 WARNING !` to have errors in words.
+- **Interrupts.** None is enabled; the vector table in `board.asm` has the
+  reset and trap entries only. The assembler will get the CSR instructions
+  and `MRET,` for them.
+- **Saving the dictionary.** What you define is in RAM; keep its source on
+  screens and `LOAD` it, the fig way.
+- **A second task.** The user area is there for it; nothing else is.
+- **`MON` and `DR1`** (MANUAL.txt section 13).
 
 ## Licence
 
