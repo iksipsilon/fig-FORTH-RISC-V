@@ -1126,6 +1126,141 @@
     lines typed at SF in test_listings.py. Then make listing, make
     test.
 
+  THE SAME EDITOR AS AN OVERLAY. Starting FORTH would not make a
+  vocabulary for this (end of chapter 9): a set of words whose names
+  clash with others it loads as an overlay (chapter 3), one of several
+  that take turns in the same part of the dictionary. The three screens
+  below are the three above made into one. They hold the same words and
+  do the same: one script of the commands, typed at both in the
+  emulator, got the same answers from both and left the same screens on
+  the disc. They have not been tried on the board.
+ 
+  It is not smaller. The overlay takes 1432 bytes and its mark 24,
+  where the vocabulary takes 1460; only SF itself, 28 bytes, is saved.
+  What it gives is that it can be taken out, and the 1432 bytes come
+  back for something else, or another overlay takes its place.
+ 
+  The book's mark is a null definition, and each overlay begins with
+ 
+      FORGET VARIATIONS  : VARIATIONS ;
+ 
+  That is not enough here. FORGET is the model's: it moves DP back and
+  sets the newest word of CURRENT, and of no other vocabulary. The
+  editor's words go into EDITOR. Forgetting in FORTH would leave the
+  newest word of EDITOR in the free space, and the next definition
+  would write over its chain. So the mark is a variable that holds the
+  newest word of EDITOR, and each overlay puts it back before it
+  forgets:
+ 
+      VARIATIONS @ DUP  EDITOR CONTEXT @ !  FORTH DEFINITIONS
+      FORGET VARIATIONS  VARIABLE VARIATIONS
+ 
+  That is the head of an overlay. The value is taken from the old mark,
+  stored as the newest word of EDITOR, and kept on the stack for the
+  new mark. FORTH DEFINITIONS comes before FORGET, which wants CONTEXT
+  and CURRENT the same (DECLARE VOCABULARY). Everything defined after
+  the mark goes, in FORTH and in EDITOR alike.
+ 
+  1. After power-on or COLD, once, make the mark:
+ 
+         EDITOR CONTEXT @ @  FORTH DEFINITIONS  VARIABLE VARIATIONS
+ 
+     Without it 10 LOAD stops at once with  VARIATIONS?  and loads
+     nothing. What you load before the mark stays: it is the book's
+     base application.
+ 
+  2. Put these on screens 10 to 12, in place of the three above, as in
+     step 1 there.
+ 
+     SCR # 10
+      0 ( STARTING FORTH EDITOR, AN OVERLAY  1 OF 3: BUFFERS, LINES )
+      1 VARIATIONS @ DUP  EDITOR CONTEXT @ !  FORTH DEFINITIONS
+      2 FORGET VARIATIONS  VARIABLE VARIATIONS
+      3 EDITOR DEFINITIONS  0 VARIABLE IBUF 64 ALLOT  IBUF 1+ C/L BLANKS
+      4 : ?TEXT  HERE C/L 1+ BLANKS  94 WORD  HERE 1+ C@
+      5    IF HERE SWAP C/L 1+ CMOVE ELSE DROP ENDIF ;
+      6 : LINE#  R# @ C/L / ;
+      7 : KEEP  LINE# LINE IBUF 1+ C/L CMOVE  C/L IBUF C! ;
+      8 : UNDER  LINE# 15 = 23 ?ERROR
+      9    LINE# 1+ DUP S  IBUF 1+ SWAP -MOVE ;
+     10 : T  DUP LINE DROP  C/L * R# !  0 M ;
+     11 : P  IBUF ?TEXT  IBUF 1+ LINE# -MOVE ;
+     12 : U  IBUF ?TEXT  UNDER  C/L R# +! ;
+     13 : X  KEEP  LINE# 15 < IF  15 LINE# DO
+     14    FORTH I 1+ LINE  I -MOVE  LOOP ENDIF  15 E ;
+     15 -->
+ 
+     SCR # 11
+      0 ( STARTING FORTH EDITOR, AN OVERLAY  2 OF 3: TEXT IN A LINE )
+      1 : F  PAD ?TEXT  N ;
+      2 : SEEK  BEGIN 1023 R# @ < IF 0 1 ELSE
+      3    1LINE IF 1 1 ELSE 0 ENDIF ENDIF UNTIL ;
+      4 : S  PAD ?TEXT  BEGIN SEEK 0= WHILE
+      5    SCR @ 1+ OVER < 0= IF PAD HERE C/L 1+ CMOVE 0 ERROR ENDIF
+      6    1 SCR +! TOP  REPEAT  DROP 0 M ;
+      7 : E  PAD C@ DELETE  0 M ;
+      8 : D  PAD ?TEXT  FIND  E ;
+      9 : TILL  #LEAD +  PAD ?TEXT  1LINE 0= 0 ?ERROR
+     10    #LEAD + SWAP - DELETE  0 M ;
+     11 : I  IBUF ?TEXT  IBUF COUNT  #LAG ROT OVER MIN >R
+     12    FORTH R R# +!  R - >R  DUP HERE R CMOVE
+     13    HERE #LEAD + R> CMOVE  R> CMOVE UPDATE  0 M ;
+     14 : R  PAD C@ DELETE  I ;
+     15 -->
+ 
+     SCR # 12
+      0 ( STARTING FORTH EDITOR, AN OVERLAY  3 OF 3: SCREENS )
+      1 : K  PAD HERE C/L 1+ CMOVE  IBUF PAD C/L 1+ CMOVE
+      2    HERE IBUF C/L 1+ CMOVE ;
+      3 : N  1 SCR +! ;
+      4 : B  -1 SCR +! ;
+      5 : M  KEEP  SCR @ >R  R# @ >R  C/L * R# !  SCR !
+      6    UNDER  R> R# !  R> SCR ! ;
+      7 : WIPE  SCR @ CLEAR ;
+      8 FORTH DEFINITIONS
+      9 ;S
+ 
+  3. 10 LOAD . It answers ISN'T UNIQUE thirteen times, as the other
+     does. A second 10 LOAD takes the editor out and puts it in again,
+     in the same place: HERE is where it was.
+ 
+  4. EDITOR makes the book's words known; not EDITOR SF. While the
+     overlay is in, the T P X F S E D TILL I R N B M of the kernel's
+     editor are hidden; L TOP COPY FLUSH and CLEAR are there. As in
+     the book:
+ 
+         20 LIST  EDITOR  WIPE
+         0 T  P THE QUICK BROWN FOX
+         U JUMPS OVER THE
+         0 T  F QUICK
+         E  I SLOW
+         0 T  D BROWN ^  L
+ 
+  5. To take it out, type lines 1 and 2 of screen 10, as two lines: a
+     line at the terminal holds 80 characters, and the two together are
+     longer. HERE is back at the mark, and the kernel's editor is as it
+     was. Words of your own defined after the mark are gone too.
+ 
+  6. An overlay of your own begins with the same two lines, then its
+     own DEFINITIONS. Loading it takes the editor out; 10 LOAD takes
+     yours out and puts the editor back.
+ 
+  What changed from the three screens above:
+ 
+  - Lines 1 and 2 are the head, in place of the VOCABULARY.
+  - EDITOR DEFINITIONS in place of SF DEFINITIONS: the words go into
+    EDITOR and hide its own from then on. The order matters as before,
+    for the same reason.
+  - IBUF 1+ C/L BLANKS in place of  IBUF C/L 1+ BLANKS  0 IBUF C! .
+    The count is the low byte of the 0 that VARIABLE stores, so only
+    the 64 characters need blanks. That makes room for EDITOR
+    DEFINITIONS on line 3, and lines 1 and 2 are the head and nothing
+    else.
+  - The head is a line longer than the VOCABULARY line was, so WIPE
+    went to the third screen.
+  - An overlay makes no VOCABULARY. VOC-LINK would be left pointing
+    into the space that the next overlay takes.
+
 
  ------------------------------------------------------------------------
  13  HOW THIS PORT DIFFERS FROM THE CLASSICAL ONES, AND WHY
